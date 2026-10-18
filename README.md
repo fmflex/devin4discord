@@ -1,68 +1,59 @@
 # devin4discord
 
-Hand Discord messages to a coding agent and follow the work in a Discord thread.
-Devin is the first supported agent. Others can be added as adapters.
+Hand Discord messages to Devin and follow the work in a Discord thread. One hosted bot serves any number of Discord servers; each server connects its own Devin organization and picks who may use it in a web UI.
 
 - **Start a task** in one of three ways:
   - React to a message with 🤖.
   - Right-click a message → Apps → **Send to Devin**.
-  - Run `/agent start task:<…>`.
+  - Run `/devin start task:<…>`.
 
-  The agent gets the message text, its images and files, and a link back to it.
-- **Follow along:** the bot opens a thread per task and posts the agent's messages, PR links and status changes there. The admin who started the task is added to the thread and pinged on new PRs and when the agent needs a reply.
-- **Give feedback:** just type in the thread, images included. Admin messages are forwarded to the agent (marked 📨). Messages that start with `//` are not forwarded.
-- **Overview:** `/agent status` inside a thread, `/agent list` anywhere.
+  Devin gets the message text, its images and files, a link back to it and who asked.
+- **Follow along:** the bot opens a thread per task and posts Devin's messages, PR links and status changes there. The member who started the task is added to the thread and pinged on new PRs and when Devin needs a reply.
+- **Give feedback:** type in the thread, images included. Messages from members allowed to reply are forwarded to Devin (marked 📨). Messages that start with `//` are not forwarded.
+- **Overview:** `/devin status` inside a thread, `/devin list` anywhere.
 
-Only members with Administrator, or one of `ALLOWED_ROLE_IDS`, can trigger anything. Agent keys stay in your own `.env`, and each team runs its own copy.
+## Who can do what
 
-## Setup
+Access is set per server by Discord role on the **Permissions** page:
 
-1. **Discord app.** Create one at https://discord.com/developers/applications.
-   - **Bot:** copy the token and enable **Message Content Intent**.
-   - **Installation:** use the `bot` and `applications.commands` scopes, with these permissions:
-     - View Channels
-     - Send Messages
-     - Send Messages in Threads
-     - Create Public Threads
-     - Read Message History
-     - Add Reactions
-   - Invite the bot to your server.
+| Permission | Allows |
+| --- | --- |
+| Start tasks | 🤖, **Send to Devin**, `/devin start`; replying in your own task threads |
+| Reply to tasks | Messages in any task thread are forwarded to Devin |
+| Manage tasks | Reply to any task (stop and sleep come in a later version) |
+| Change settings | Use the setup UI for this server |
 
-   Use a separate Discord application for this bot. On start-up it replaces the application's commands, so sharing a token with another bot would delete that bot's commands.
-2. **Agent key.** For Devin: Settings → Devin API → Service users. Create a user with permission to create, view and message sessions, then note its key and your org ID.
-3. **Configure.** Run `cp .env.example .env` and fill in `DISCORD_TOKEN`, `DISCORD_GUILD_ID`, `DEVIN_API_KEY` and `DEVIN_ORG_ID`. Everything else is optional and documented in `.env.example`.
-4. **Run:**
+Members with **Administrator** can do everything; **Manage Server** can change settings. Each role can also cap ACUs per task, tasks per user per day and concurrent tasks; a member with several roles gets the most generous limit. The **Channels** page limits where tasks can start and picks the channel task threads open in.
+
+Tasks are created by the server's Devin service user and tagged `discord`, `discord-guild:<id>` and `discord-user:<id>`. The prompt names the Discord member. A member runs as a Devin user only when the server maps them on the Devin page.
+
+Until a server saves a Devin key, every trigger there gets a private reply pointing to the setup UI. Every settings change and task start is written to the server's **Audit log**.
+
+## Hosting it
+
+`.env` holds only host settings; everything per server is stored in SQLite, with Devin keys encrypted (AES-256-GCM, key derived from `MASTER_KEY`).
+
+1. **Discord app.** Create one at https://discord.com/developers/applications. Use a separate app for this bot: on start-up it replaces the app's commands.
+   - **Bot:** reset and copy the token. Enable **Message Content Intent**.
+   - **OAuth2:** copy the client ID and client secret. Under **Redirects** add `<PUBLIC_URL>/auth/callback`, e.g. `https://devin.example.com/auth/callback`.
+   - **Installation:** set the install link to **None**. Servers add the bot from the setup UI's **Add to Discord** button, which asks for View Channels, Send Messages, Send Messages in Threads, Create Public Threads, Read Message History, Add Reactions and Embed Links.
+2. **Configure.** `cp .env.example .env`, then fill in `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `MASTER_KEY` (`openssl rand -base64 48`) and `PUBLIC_URL`. Back up `MASTER_KEY`: without it, saved Devin keys can't be read.
+3. **Run:**
 
    ```sh
    docker compose up -d --build
    docker compose logs -f
    ```
 
-   The bot registers its commands on start-up. State is a SQLite file in the `bridge-data` volume.
-
-Without Docker, Node 24+ also works: `npm ci && npm start`.
-
-## Hosting
-
-The bot keeps an outgoing connection to Discord open and polls the agent's API. It needs no open ports, domain or HTTPS, but it must run all the time. Serverless platforms like Lambda or Vercel functions don't fit.
-
-| Where | Rough cost | Notes |
-| --- | --- | --- |
-| Railway / Fly.io / Render | ~$5/mo | Deploy from the Dockerfile and mount a volume at `/data`. |
-| AWS EC2 `t4g.nano` / Lightsail | ~$3–5/mo | Install Docker, then `docker compose up -d`. You patch the OS. |
-| Any always-on machine | free | Home server, Raspberry Pi (arm64 works), an existing VPS. |
+   State is a SQLite file in the `bridge-data` volume. The web UI listens on port 3000 inside the compose network and is published only through the tunnel.
+4. **Tunnel.**
+   - **Quick tunnel** (default, `COMPOSE_PROFILES=quick-tunnel`): `docker compose logs tunnel` shows a `https://<words>.trycloudflare.com` URL. Set it as `PUBLIC_URL`, add `<that URL>/auth/callback` to the Discord app's redirects and run `docker compose up -d bridge`. The URL changes whenever the tunnel container restarts.
+   - **Named tunnel**: in Cloudflare Zero Trust → Networks → Tunnels, create a tunnel with a public hostname pointing to `http://bridge:3000`. Set `COMPOSE_PROFILES=named-tunnel`, `TUNNEL_TOKEN` and `PUBLIC_URL=https://<hostname>`, then `docker compose up -d`.
+5. **Set up a server.** Open `PUBLIC_URL`, sign in with Discord, click **Add to Discord** for the server, then **Configure**: paste a Devin service user key (Devin → Settings → Service users, with permission to create, view and message sessions) and the org ID. The key is checked with read-only API calls before it's saved and is never shown again.
 
 Run exactly one copy per bot token. Two copies would both relay every message.
 
-## Adding an agent
-
-Implement `AgentAdapter` from `src/agents/types.ts`:
-
-- `startTask`
-- `sendMessage`
-- `getUpdate` (new messages after a cursor, status and PR URLs)
-
-Then add a case for it in `loadAgent` in `src/config.ts`. Use `src/agents/devin.ts` as the reference.
+Without Docker, Node 24+ also works: `npm ci && npm start`, with the UI reached at `PUBLIC_URL` through your own reverse proxy or tunnel.
 
 ## Development
 
@@ -72,4 +63,12 @@ npm run typecheck
 npm test
 ```
 
-The tests use a fake agent, a fake Discord layer and an in-memory database. They make no network calls.
+The tests use fake Discord and Devin layers, mocked `fetch` and an in-memory database. They make no network calls.
+
+To look at the setup UI without a Discord app:
+
+```sh
+NODE_ENV=development DEV_LOGIN_GUILD_ID=900000000000000001 npm run dev:web
+```
+
+then open http://localhost:3000/auth/dev. It signs in as a seeded admin of a fake server with mocked Discord data and accepts any Devin key without calling Devin. `src/dev-web.ts` refuses to start unless both variables are set, and the production entry point never loads it.

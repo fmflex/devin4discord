@@ -1,10 +1,8 @@
-import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
 
 export type TaskRow = {
   taskId: string;
-  agent: string;
+  guildId: string | null;
   threadId: string;
   sourceMessageId: string | null;
   openerId: string;
@@ -20,7 +18,7 @@ export type TaskRow = {
 
 type Raw = {
   task_id: string;
-  agent: string;
+  guild_id: string | null;
   thread_id: string;
   source_message_id: string | null;
   opener_id: string;
@@ -37,7 +35,7 @@ type Raw = {
 function fromRaw(raw: Raw): TaskRow {
   return {
     taskId: raw.task_id,
-    agent: raw.agent,
+    guildId: raw.guild_id,
     threadId: raw.thread_id,
     sourceMessageId: raw.source_message_id,
     openerId: raw.opener_id,
@@ -54,52 +52,31 @@ function fromRaw(raw: Raw): TaskRow {
 
 export type NewTask = Pick<
   TaskRow,
-  'taskId' | 'agent' | 'threadId' | 'sourceMessageId' | 'openerId' | 'title' | 'url'
->;
+  'taskId' | 'threadId' | 'sourceMessageId' | 'openerId' | 'title' | 'url'
+> & { guildId: string };
 
 export type TaskPatch = Partial<
-  Pick<TaskRow, 'stateLabel' | 'cursor' | 'pullRequests' | 'active'>
+  Pick<TaskRow, 'stateLabel' | 'cursor' | 'pullRequests' | 'active' | 'guildId'>
 >;
 
-/** Links agent tasks to Discord threads. `path` may be ":memory:". */
+/** Links Devin sessions to Discord threads. */
 export class TaskStore {
   private readonly db: DatabaseSync;
 
-  constructor(path: string) {
-    if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
-    this.db = new DatabaseSync(path);
-    this.db.exec(`
-      pragma journal_mode = wal;
-      create table if not exists tasks (
-        task_id text primary key,
-        agent text not null,
-        thread_id text not null unique,
-        source_message_id text,
-        opener_id text not null,
-        title text not null,
-        url text not null,
-        state_label text,
-        cursor text,
-        pull_requests text not null default '[]',
-        active integer not null default 1,
-        created_at integer not null,
-        updated_at integer not null
-      );
-      create index if not exists tasks_source_idx on tasks (source_message_id);
-      create index if not exists tasks_active_idx on tasks (active, updated_at);
-    `);
+  constructor(db: DatabaseSync) {
+    this.db = db;
   }
 
   insert(task: NewTask) {
     const now = Date.now();
     this.db
       .prepare(
-        `insert into tasks (task_id, agent, thread_id, source_message_id, opener_id, title, url, created_at, updated_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `insert into tasks (task_id, agent, guild_id, thread_id, source_message_id, opener_id, title, url, created_at, updated_at)
+         values (?, 'devin', ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         task.taskId,
-        task.agent,
+        task.guildId,
         task.threadId,
         task.sourceMessageId,
         task.openerId,
@@ -128,10 +105,35 @@ export class TaskStore {
     ).map(fromRaw);
   }
 
-  recent(limit: number): TaskRow[] {
+  recent(guildId: string, limit: number): TaskRow[] {
     return (
-      this.db.prepare('select * from tasks order by created_at desc limit ?').all(limit) as Raw[]
+      this.db
+        .prepare('select * from tasks where guild_id = ? order by created_at desc limit ?')
+        .all(guildId, limit) as Raw[]
     ).map(fromRaw);
+  }
+
+  /** Tasks from before servers were tracked; their guild is looked up on start-up. */
+  withoutGuild(): TaskRow[] {
+    return (
+      this.db.prepare('select * from tasks where guild_id is null').all() as Raw[]
+    ).map(fromRaw);
+  }
+
+  countStartedSince(guildId: string, openerId: string, since: number): number {
+    const row = this.db
+      .prepare(
+        'select count(*) as n from tasks where guild_id = ? and opener_id = ? and created_at >= ?'
+      )
+      .get(guildId, openerId, since) as { n: number };
+    return row.n;
+  }
+
+  countActive(guildId: string, openerId: string): number {
+    const row = this.db
+      .prepare('select count(*) as n from tasks where guild_id = ? and opener_id = ? and active = 1')
+      .get(guildId, openerId) as { n: number };
+    return row.n;
   }
 
   update(taskId: string, patch: TaskPatch) {
@@ -153,12 +155,12 @@ export class TaskStore {
       sets.push('active = ?');
       values.push(patch.active ? 1 : 0);
     }
+    if (patch.guildId !== undefined) {
+      sets.push('guild_id = ?');
+      values.push(patch.guildId);
+    }
     sets.push('updated_at = ?');
     values.push(Date.now(), taskId);
     this.db.prepare(`update tasks set ${sets.join(', ')} where task_id = ?`).run(...values);
-  }
-
-  close() {
-    this.db.close();
   }
 }

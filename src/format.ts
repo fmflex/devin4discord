@@ -1,4 +1,4 @@
-import type { Attachment, TaskState } from './agents/types.ts';
+import type { Attachment, Person, TaskState } from './devin.ts';
 
 export const DISCORD_MESSAGE_LIMIT = 2000;
 
@@ -31,12 +31,20 @@ export type ForwardedMessage = {
   attachments: Attachment[];
 };
 
+export const DEFAULT_INSTRUCTIONS =
+  'Work out what is being asked, fix it and open a pull request. If it is unclear or not actionable, say why and what you need.';
+
 export const RELAY_NOTE =
   'Your messages are relayed to a Discord thread where the team follows along; their replies in that thread come back to you.';
 
-/** Prompt for a Discord message an admin forwarded to the agent. */
+function requester(opener: Person) {
+  return `Requested on Discord by ${opener.name} (Discord ID ${opener.discordId}).`;
+}
+
+/** Prompt for a Discord message someone forwarded to Devin. */
 export function forwardedMessagePrompt(
   message: ForwardedMessage,
+  opener: Person,
   instructions: string
 ): string {
   const quoted = message.content.trim()
@@ -51,7 +59,7 @@ export function forwardedMessagePrompt(
         .map((file) => `- ${file.filename}: ${file.url}`)
         .join('\n')}`
     : '';
-  return `Someone posted this on Discord and an admin forwarded it to you.
+  return `Someone posted this on Discord and ${opener.name} forwarded it to you.
 
 Author: ${message.authorName} (Discord ID ${message.authorId})
 Message: ${message.link}
@@ -60,11 +68,14 @@ ${quoted}${files}
 
 ${instructions}
 
-${RELAY_NOTE}`;
+${requester(opener)} ${RELAY_NOTE}`;
 }
 
-export function taskPrompt(task: string, instructions: string): string {
-  return `${task}\n\n${instructions}\n\n${RELAY_NOTE}`.replace(/\n{3,}/g, '\n\n');
+export function taskPrompt(task: string, opener: Person, instructions: string): string {
+  return `${task}\n\n${instructions}\n\n${requester(opener)} ${RELAY_NOTE}`.replace(
+    /\n{3,}/g,
+    '\n\n'
+  );
 }
 
 /** Status changes worth announcing (and pinging the opener for). */

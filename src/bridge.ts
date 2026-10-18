@@ -1,4 +1,4 @@
-import type { AgentAdapter, Attachment, Person } from './agents/types.ts';
+import type { Attachment, DevinApi, Person } from './devin.ts';
 import {
   chunkMessage,
   forwardedMessagePrompt,
@@ -20,9 +20,12 @@ export interface ChatPort {
 }
 
 export type StartRequest = {
+  guildId: string;
   opener: Person;
   /** Channel the thread is opened in. */
   channelId: string;
+  instructions: string;
+  maxAcu: number | null;
 } & (
   | { kind: 'message'; message: ForwardedMessage & { id: string } }
   | { kind: 'prompt'; task: string; attachments: Attachment[] }
@@ -32,30 +35,26 @@ export type StartResult =
   | { started: true; threadId: string; url: string }
   | { started: false; threadId: string };
 
+/** Returns the server's Devin client, or null when the server isn't set up. */
+export type DevinResolver = (guildId: string) => DevinApi | null;
+
 export class Bridge {
-  private readonly agent: AgentAdapter;
+  private readonly devin: DevinResolver;
   private readonly store: TaskStore;
   private readonly chat: ChatPort;
-  private readonly instructions: string;
   private readonly ignorePrefix: string;
   private readonly syncing = new Set<string>();
 
   constructor(options: {
-    agent: AgentAdapter;
+    devin: DevinResolver;
     store: TaskStore;
     chat: ChatPort;
-    instructions: string;
     ignorePrefix: string;
   }) {
-    this.agent = options.agent;
+    this.devin = options.devin;
     this.store = options.store;
     this.chat = options.chat;
-    this.instructions = options.instructions;
     this.ignorePrefix = options.ignorePrefix;
-  }
-
-  get agentName() {
-    return this.agent.name;
   }
 
   async start(request: StartRequest): Promise<StartResult> {
@@ -63,6 +62,8 @@ export class Bridge {
       const existing = this.store.bySourceMessage(request.message.id);
       if (existing) return { started: false, threadId: existing.threadId };
     }
+    const devin = this.devin(request.guildId);
+    if (!devin) throw new Error('Devin is not set up in this server.');
     const forwarded = request.kind === 'message' ? request.message : null;
     const title =
       request.kind === 'message'
@@ -72,24 +73,26 @@ export class Bridge {
       request.kind === 'message' ? request.message.attachments : request.attachments;
     const prompt =
       request.kind === 'message'
-        ? forwardedMessagePrompt(request.message, this.instructions)
-        : taskPrompt(request.task, this.instructions);
+        ? forwardedMessagePrompt(request.message, request.opener, request.instructions)
+        : taskPrompt(request.task, request.opener, request.instructions);
 
-    const task = await this.agent.startTask({
+    const task = await devin.startTask({
       prompt,
       title,
       attachments,
-      requestedBy: request.opener
+      requestedBy: request.opener,
+      guildId: request.guildId,
+      maxAcu: request.maxAcu
     });
     const source = forwarded ? ` from ${forwarded.link}` : '';
     const threadId = await this.chat.createTaskThread(
       request.channelId,
-      `${this.agent.name}: ${title}`,
+      `Devin: ${title}`,
       `**${title}**\nStarted by <@${request.opener.discordId}>${source}\n${task.url}`
     );
     this.store.insert({
       taskId: task.id,
-      agent: this.agent.name,
+      guildId: request.guildId,
       threadId,
       sourceMessageId: forwarded?.id ?? null,
       openerId: request.opener.discordId,
@@ -104,13 +107,13 @@ export class Bridge {
       : '';
     await this.post(
       threadId,
-      `${this.agent.name} is on it. Reply in this thread to give it feedback, images included.${aside}`
+      `Devin is on it. Reply in this thread to give it feedback, images included.${aside}`
     );
     return { started: true, threadId, url: task.url };
   }
 
-  isTaskThread(threadId: string) {
-    return this.store.byThread(threadId) !== null;
+  task(threadId: string) {
+    return this.store.byThread(threadId);
   }
 
   /** Forwards a thread message to the thread's task. False if none. */
@@ -121,8 +124,10 @@ export class Bridge {
     attachments: Attachment[]
   ): Promise<boolean> {
     const row = this.store.byThread(threadId);
-    if (!row) return false;
-    await this.agent.sendMessage(row.taskId, {
+    if (!row?.guildId) return false;
+    const devin = this.devin(row.guildId);
+    if (!devin) throw new Error('Devin is not set up in this server.');
+    await devin.sendMessage(row.taskId, {
       text: text.trim() || '(see the attached files)',
       attachments,
       from
@@ -131,12 +136,8 @@ export class Bridge {
     return true;
   }
 
-  recent(limit = 10) {
-    return this.store.recent(limit);
-  }
-
-  task(threadId: string) {
-    return this.store.byThread(threadId);
+  recent(guildId: string, limit = 10) {
+    return this.store.recent(guildId, limit);
   }
 
   async syncAll() {
@@ -149,14 +150,16 @@ export class Bridge {
     }
   }
 
-  /** Relays new agent messages, PRs and status changes into the thread. */
+  /** Relays new Devin messages, PRs and status changes into the thread. */
   async sync(row: TaskRow) {
-    if (this.syncing.has(row.taskId)) return;
+    if (!row.guildId || this.syncing.has(row.taskId)) return;
+    const devin = this.devin(row.guildId);
+    if (!devin) return;
     this.syncing.add(row.taskId);
     try {
-      const update = await this.agent.getUpdate(row.taskId, row.cursor);
+      const update = await devin.getUpdate(row.taskId, row.cursor);
       for (const message of update.messages) {
-        await this.post(row.threadId, `**${this.agent.name}:** ${message.text}`);
+        await this.post(row.threadId, `**Devin:** ${message.text}`);
         this.store.update(row.taskId, { cursor: message.id });
       }
       const known = new Set(row.pullRequests);
@@ -172,7 +175,7 @@ export class Bridge {
         row.stateLabel,
         update.state,
         update.stateLabel,
-        this.agent.name
+        'Devin'
       );
       if (announcement) await this.post(row.threadId, announcement, row.openerId);
       this.store.update(row.taskId, {

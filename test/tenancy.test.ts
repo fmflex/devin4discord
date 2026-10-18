@@ -1,0 +1,223 @@
+import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { test } from 'node:test';
+import { Bot, unconfiguredReply } from '../src/bot.ts';
+import { Bridge, type ChatPort } from '../src/bridge.ts';
+import { Secrets } from '../src/crypto.ts';
+import { MIGRATIONS, SCHEMA_VERSION, migrate, openDatabase } from '../src/db.ts';
+import type { DevinApi, StartTaskInput } from '../src/devin.ts';
+import { GuildStore } from '../src/guilds.ts';
+import {
+  NO_LIMITS,
+  canConfigure,
+  hasPermission,
+  startLimits,
+  type MemberSnapshot,
+  type RoleRule
+} from '../src/permissions.ts';
+import { TaskStore } from '../src/store.ts';
+import { devinResolver } from '../src/tenants.ts';
+
+const KEY = 'a-master-key-that-is-long-enough-123456';
+
+test('secrets round-trip, are bound to their guild and fail with the wrong key', () => {
+  const secrets = new Secrets(KEY);
+  const blob = secrets.encrypt('cog_secret_4f2a', 'guild-1');
+  assert.doesNotMatch(blob, /cog_secret/);
+  assert.notEqual(blob, secrets.encrypt('cog_secret_4f2a', 'guild-1'));
+  assert.equal(secrets.decrypt(blob, 'guild-1'), 'cog_secret_4f2a');
+  assert.throws(() => secrets.decrypt(blob, 'guild-2'));
+  assert.throws(() => new Secrets(`${KEY}-other`).decrypt(blob, 'guild-1'));
+  const [version, iv, tag, body] = blob.split(':');
+  const flipped = Buffer.from(body, 'base64url');
+  flipped[0] ^= 1;
+  assert.throws(() => secrets.decrypt([version, iv, tag, flipped.toString('base64url')].join(':'), 'guild-1'));
+  assert.throws(() => new Secrets('short'), /MASTER_KEY/);
+});
+
+const G = '900000000000000001';
+const MOD = '300000000000000002';
+const HELPER = '300000000000000003';
+
+function member(overrides: Partial<MemberSnapshot> = {}): MemberSnapshot {
+  return { id: '10', name: 'Member', roleIds: [G], isAdmin: false, canManageGuild: false, ...overrides };
+}
+
+const rules: RoleRule[] = [
+  { roleId: MOD, permissions: ['start_tasks', 'reply', 'manage_tasks', 'settings'], limits: { maxAcu: 20, tasksPerDay: null, concurrentTasks: 3 } },
+  { roleId: HELPER, permissions: ['start_tasks', 'reply'], limits: { maxAcu: 5, tasksPerDay: 2, concurrentTasks: 1 } }
+];
+
+test('permission rules: Administrator, Manage Server, settings role and non-members', () => {
+  assert.equal(canConfigure(member({ isAdmin: true }), []), true);
+  assert.equal(hasPermission(member({ isAdmin: true }), [], 'start_tasks'), true);
+  assert.equal(canConfigure(member({ canManageGuild: true }), []), true);
+  assert.equal(hasPermission(member({ canManageGuild: true }), [], 'start_tasks'), false);
+  assert.equal(canConfigure(member({ roleIds: [G, MOD] }), rules), true);
+  assert.equal(canConfigure(member({ roleIds: [G, HELPER] }), rules), false);
+  assert.equal(canConfigure(member(), rules), false);
+  assert.equal(canConfigure(null, rules), false);
+});
+
+test('start limits take the most generous role, and admins have none', () => {
+  assert.deepEqual(startLimits(member({ roleIds: [G, HELPER] }), rules), { maxAcu: 5, tasksPerDay: 2, concurrentTasks: 1 });
+  assert.deepEqual(startLimits(member({ roleIds: [G, HELPER, MOD] }), rules), { maxAcu: 20, tasksPerDay: null, concurrentTasks: 3 });
+  assert.deepEqual(startLimits(member({ isAdmin: true, roleIds: [G, HELPER] }), rules), NO_LIMITS);
+});
+
+test('migrations keep starter tasks and are idempotent', () => {
+  const db = new DatabaseSync(':memory:');
+  db.exec(MIGRATIONS[0]);
+  db.exec('pragma user_version = 1');
+  db.prepare(
+    `insert into tasks (task_id, agent, thread_id, opener_id, title, url, created_at, updated_at)
+     values ('devin-1', 'devin', 'thread-1', '10', 'Old task', 'https://app.devin.ai/sessions/1', 1, 1)`
+  ).run();
+  migrate(db);
+  migrate(db);
+  assert.equal((db.prepare('pragma user_version').get() as { user_version: number }).user_version, SCHEMA_VERSION);
+  const tasks = new TaskStore(db);
+  const old = tasks.byThread('thread-1');
+  assert.equal(old?.title, 'Old task');
+  assert.equal(old?.guildId, null);
+  assert.deepEqual(tasks.withoutGuild().map((row) => row.taskId), ['devin-1']);
+  tasks.update('devin-1', { guildId: G });
+  assert.equal(tasks.byThread('thread-1')?.guildId, G);
+  assert.deepEqual(tasks.withoutGuild(), []);
+});
+
+test('guild settings persist, and only the encrypted key is stored', () => {
+  const db = openDatabase(':memory:');
+  const guilds = new GuildStore(db);
+  const secrets = new Secrets(KEY);
+  guilds.ensure(G, 'Test');
+  assert.equal(guilds.isConfigured(G), false);
+  guilds.saveDevin(G, {
+    apiKeyEncrypted: secrets.encrypt('cog_plain_4f2a', G),
+    apiKeyHint: '4f2a',
+    orgId: 'org-1',
+    defaultRepos: ['acme/app'],
+    userMap: { '10': 'user-1' }
+  });
+  guilds.setRoleRules(G, rules);
+  guilds.setChannels(G, ['c1', 'c2'], 'c2');
+  assert.equal(guilds.isConfigured(G), true);
+  assert.deepEqual(guilds.roleRules(G), rules);
+  assert.deepEqual(guilds.allowedChannels(G).sort(), ['c1', 'c2']);
+  assert.equal(guilds.settings(G)?.taskChannelId, 'c2');
+  assert.equal(guilds.devin(G)?.apiKeyHint, '4f2a');
+  const dump = JSON.stringify(db.prepare('select * from guild_devin').all());
+  assert.doesNotMatch(dump, /cog_plain/);
+  assert.equal(devinResolver(guilds, secrets, 'https://devin.test') (G) !== null, true);
+  guilds.clearDevin(G);
+  assert.equal(guilds.isConfigured(G), false);
+});
+
+function botSetup() {
+  const db = openDatabase(':memory:');
+  const guilds = new GuildStore(db);
+  const tasks = new TaskStore(db);
+  const started: StartTaskInput[] = [];
+  const forwarded: string[] = [];
+  let next = 1;
+  const devin: DevinApi = {
+    async startTask(input) {
+      started.push(input);
+      const id = `task-${next++}`;
+      return { id, url: `https://devin.test/${id}` };
+    },
+    async sendMessage(_taskId, input) {
+      forwarded.push(input.text);
+    },
+    async getUpdate() {
+      throw new Error('not used');
+    }
+  };
+  let threads = 0;
+  const chat: ChatPort = {
+    async createTaskThread() {
+      return `thread-${++threads}`;
+    },
+    async addThreadMember() {},
+    async send() {}
+  };
+  const bridge = new Bridge({
+    devin: (guildId) => (guilds.isConfigured(guildId) ? devin : null),
+    store: tasks,
+    chat,
+    ignorePrefix: '//'
+  });
+  let now = Date.now();
+  const bot = new Bot({ bridge, guilds, tasks, publicUrl: 'https://devin.example.com', now: () => now });
+  const configure = () => {
+    guilds.ensure(G, 'Test');
+    guilds.saveDevin(G, { apiKeyEncrypted: 'x', apiKeyHint: 'abcd', orgId: 'org-1', defaultRepos: [], userMap: {} });
+    guilds.setRoleRules(G, rules);
+  };
+  return { bot, guilds, tasks, started, forwarded, configure, advance: (ms: number) => (now += ms) };
+}
+
+const channel = { id: 'c1', parentId: null };
+const message = { id: 'm1', authorName: 'Player', authorId: '99', link: 'https://discord.com/x', content: 'Bug', attachments: [] };
+
+test('every trigger in an unconfigured server gets the setup link', async () => {
+  const t = botSetup();
+  const expected = "Devin isn't set up in this server yet. An admin can set it up at https://devin.example.com";
+  assert.equal(unconfiguredReply('https://devin.example.com'), expected);
+  const admin = member({ isAdmin: true });
+  const outcomes = [
+    await t.bot.startFromMessage(G, admin, channel, message),
+    await t.bot.startFromPrompt(G, admin, channel, 'Do a thing', []),
+    await t.bot.status(G, admin, 'thread-1'),
+    t.bot.list(G, admin)
+  ];
+  for (const outcome of outcomes) assert.deepEqual(outcome, { ok: false, reason: 'unconfigured', reply: expected });
+  assert.equal(t.started.length, 0);
+});
+
+test('triggers are gated by role permissions, channels and limits', async () => {
+  const t = botSetup();
+  t.configure();
+  const nobody = member({ id: '1' });
+  const helper = member({ id: '2', roleIds: [G, HELPER] });
+  const mod = member({ id: '3', roleIds: [G, MOD] });
+
+  const denied = await t.bot.startFromMessage(G, nobody, channel, message);
+  assert.equal(denied.ok === false && denied.reason, 'forbidden');
+  assert.equal(t.bot.list(G, nobody).ok, false);
+
+  const first = await t.bot.startFromPrompt(G, helper, channel, 'one', []);
+  assert.equal(first.ok && first.started, true);
+  assert.equal(t.started[0].maxAcu, 5);
+  assert.equal(t.started[0].guildId, G);
+
+  const concurrent = await t.bot.startFromPrompt(G, helper, channel, 'two', []);
+  assert.equal(concurrent.ok === false && concurrent.reason, 'limit');
+  t.tasks.update('task-1', { active: false });
+  assert.equal((await t.bot.startFromPrompt(G, helper, channel, 'two', [])).ok, true);
+  t.tasks.update('task-2', { active: false });
+  const daily = await t.bot.startFromPrompt(G, helper, channel, 'three', []);
+  assert.equal(daily.ok === false && daily.reason, 'limit');
+  t.advance(25 * 60 * 60 * 1000);
+  assert.equal((await t.bot.startFromPrompt(G, helper, channel, 'three', [])).ok, true);
+
+  t.guilds.setChannels(G, ['c2'], null);
+  const wrongChannel = await t.bot.startFromPrompt(G, mod, channel, 'x', []);
+  assert.equal(wrongChannel.ok === false && wrongChannel.reason, 'channel');
+  assert.equal((await t.bot.startFromPrompt(G, mod, { id: 'thread-x', parentId: 'c2' }, 'x', [])).ok, true);
+});
+
+test('thread replies need reply, manage_tasks, or being the opener', async () => {
+  const t = botSetup();
+  t.configure();
+  const helper = member({ id: '2', roleIds: [G, HELPER] });
+  await t.bot.startFromPrompt(G, helper, channel, 'one', []);
+  const thread = t.tasks.active()[0].threadId;
+
+  const outsider = await t.bot.reply(G, member({ id: '5' }), thread, 'hi', []);
+  assert.equal(outsider.ok === false && outsider.reason, 'forbidden');
+  assert.equal((await t.bot.reply(G, helper, thread, 'more info', [])).ok, true);
+  const other = await t.bot.reply('900000000000000099', helper, thread, 'x', []);
+  assert.equal(other.ok === false && other.reason, 'not_task');
+  assert.deepEqual(t.forwarded, ['more info']);
+});

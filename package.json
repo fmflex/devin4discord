@@ -1,0 +1,26 @@
+{
+  "name": "devin4discord",
+  "version": "0.1.0",
+  "description": "Start and follow Devin tasks from Discord. Hosted, multi-server, configured in a web UI.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/index.ts",
+    "dev:web": "node src/dev-web.ts",
+    "typecheck": "tsc",
+    "test": "node --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "discord.js": "^14.27.0",
+    "hono": "^4.13.13"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^5.9.3"
+  }
+}

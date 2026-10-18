@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { AgentAdapter, StartTaskInput, TaskUpdate } from '../src/agents/types.ts';
 import { Bridge, type ChatPort } from '../src/bridge.ts';
+import { openDatabase } from '../src/db.ts';
+import type { DevinApi, StartTaskInput, TaskUpdate } from '../src/devin.ts';
 import { TaskStore } from '../src/store.ts';
 
 type Sent = { channelId: string; content: string; ping?: string };
@@ -27,8 +28,7 @@ function setup() {
       sent.push({ channelId, content, ...(ping ? { ping } : {}) });
     }
   };
-  const agent: AgentAdapter = {
-    name: 'Devin',
+  const devin: DevinApi = {
     async startTask(input) {
       started.push(input);
       const id = `task-${nextTask++}`;
@@ -44,12 +44,13 @@ function setup() {
       return update;
     }
   };
-  const store = new TaskStore(':memory:');
-  const bridge = new Bridge({ agent, store, chat, instructions: 'Fix it.', ignorePrefix: '//' });
+  const store = new TaskStore(openDatabase(':memory:'));
+  const bridge = new Bridge({ devin: (guildId) => (guildId === 'g1' ? devin : null), store, chat, ignorePrefix: '//' });
   return { bridge, store, sent, members, threads, started, forwarded, updates };
 }
 
 const opener = { discordId: '10', name: 'Admin' };
+const base = { guildId: 'g1', opener, instructions: 'Fix it.', maxAcu: null };
 const message = {
   id: 'msg-1',
   authorName: 'Player',
@@ -72,7 +73,7 @@ function update(overrides: Partial<TaskUpdate> = {}): TaskUpdate {
 
 test('starting from a message opens a thread, adds the opener and stores the task', async () => {
   const t = setup();
-  const result = await t.bridge.start({ kind: 'message', opener, channelId: 'chan', message });
+  const result = await t.bridge.start({ kind: 'message', ...base, channelId: 'chan', message });
   assert.deepEqual(result, { started: true, threadId: 'thread-1', url: 'https://agent.test/task-1' });
   assert.equal(t.started[0].title, 'Player: The button does nothing');
   assert.match(t.started[0].prompt, /> The button does nothing/);
@@ -88,15 +89,15 @@ test('starting from a message opens a thread, adds the opener and stores the tas
 
 test('the same message does not start a second task', async () => {
   const t = setup();
-  await t.bridge.start({ kind: 'message', opener, channelId: 'chan', message });
-  const again = await t.bridge.start({ kind: 'message', opener, channelId: 'chan', message });
+  await t.bridge.start({ kind: 'message', ...base, channelId: 'chan', message });
+  const again = await t.bridge.start({ kind: 'message', ...base, channelId: 'chan', message });
   assert.deepEqual(again, { started: false, threadId: 'thread-1' });
   assert.equal(t.started.length, 1);
 });
 
 test('sync relays messages without pings, pings on PRs and waiting, and never repeats', async () => {
   const t = setup();
-  await t.bridge.start({ kind: 'prompt', opener, channelId: 'chan', task: 'Add dark mode', attachments: [] });
+  await t.bridge.start({ kind: 'prompt', ...base, channelId: 'chan', task: 'Add dark mode', attachments: [] });
   t.sent.length = 0;
   t.updates.set(
     'task-1',
@@ -131,7 +132,7 @@ test('sync relays messages without pings, pings on PRs and waiting, and never re
 
 test('a finished or failed task stops being polled until someone replies', async () => {
   const t = setup();
-  await t.bridge.start({ kind: 'prompt', opener, channelId: 'chan', task: 'x', attachments: [] });
+  await t.bridge.start({ kind: 'prompt', ...base, channelId: 'chan', task: 'x', attachments: [] });
   t.updates.set('task-1', update({ state: 'ended', stateLabel: 'ended' }));
   await t.bridge.syncAll();
   assert.equal(t.store.active().length, 0);
@@ -150,8 +151,8 @@ test('forward ignores threads without a task', async () => {
 
 test('one failing task does not stop the others from syncing', async () => {
   const t = setup();
-  await t.bridge.start({ kind: 'prompt', opener, channelId: 'chan', task: 'a', attachments: [] });
-  await t.bridge.start({ kind: 'prompt', opener, channelId: 'chan', task: 'b', attachments: [] });
+  await t.bridge.start({ kind: 'prompt', ...base, channelId: 'chan', task: 'a', attachments: [] });
+  await t.bridge.start({ kind: 'prompt', ...base, channelId: 'chan', task: 'b', attachments: [] });
   t.sent.length = 0;
   t.updates.set('task-1', new Error('boom'));
   t.updates.set('task-2', update({ messages: [{ id: 'e1', text: 'hello' }], cursor: 'e1' }));
@@ -163,4 +164,16 @@ test('one failing task does not stop the others from syncing', async () => {
     console.error = originalError;
   }
   assert.deepEqual(t.sent, [{ channelId: 'thread-2', content: '**Devin:** hello' }]);
+});
+
+test('tasks record their server and fail in a server without Devin', async () => {
+  const t = setup();
+  await t.bridge.start({ kind: 'prompt', ...base, maxAcu: 5, channelId: 'chan', task: 'x', attachments: [] });
+  assert.equal(t.store.byThread('thread-1')?.guildId, 'g1');
+  assert.equal(t.started[0].guildId, 'g1');
+  assert.equal(t.started[0].maxAcu, 5);
+  await assert.rejects(
+    t.bridge.start({ kind: 'prompt', ...base, guildId: 'g2', channelId: 'chan', task: 'x', attachments: [] }),
+    /not set up/
+  );
 });

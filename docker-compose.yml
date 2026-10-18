@@ -3,8 +3,30 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
+    environment:
+      # The tunnel token is only for cloudflared.
+      TUNNEL_TOKEN: ""
     volumes:
       - bridge-data:/data
+
+  # Quick tunnel (default): a random https://<words>.trycloudflare.com URL that
+  # changes when this container restarts. Find it with `docker compose logs tunnel`.
+  tunnel:
+    image: cloudflare/cloudflared:2026.10.1
+    restart: unless-stopped
+    profiles: [quick-tunnel]
+    command: tunnel --no-autoupdate --url http://bridge:3000
+    depends_on: [bridge]
+
+  # Named tunnel: a fixed hostname set up in Cloudflare Zero Trust, routed to http://bridge:3000.
+  tunnel-named:
+    image: cloudflare/cloudflared:2026.10.1
+    restart: unless-stopped
+    profiles: [named-tunnel]
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on: [bridge]
 
 volumes:
   bridge-data:

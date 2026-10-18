@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { parseUserMap, loadConfig } from '../src/config.ts';
+import { loadConfig } from '../src/config.ts';
 import { chunkMessage, shortTitle, stateAnnouncement } from '../src/format.ts';
 
 test('chunkMessage splits on line boundaries within the limit', () => {
@@ -23,13 +23,21 @@ test('stateAnnouncement only announces changes worth a ping', () => {
   assert.equal(stateAnnouncement('working', 'asleep', 'suspended (out of credits)', 'Devin'), 'Task suspended (out of credits).');
 });
 
-test('config parses lists, the user map and defaults', () => {
-  assert.deepEqual([...parseUserMap('1:a, 2:b,bad,3:')], [['1', 'a'], ['2', 'b']]);
-  const config = loadConfig({ DISCORD_TOKEN: 't', ALLOWED_ROLE_IDS: '5, 6', DATA_DIR: '/data' });
-  assert.deepEqual(config.allowedRoleIds, ['5', '6']);
-  assert.equal(config.triggerEmoji, '🤖');
+const hostEnv = {
+  DISCORD_TOKEN: 't',
+  DISCORD_CLIENT_ID: '1',
+  DISCORD_CLIENT_SECRET: 's',
+  MASTER_KEY: 'k'.repeat(32),
+  PUBLIC_URL: 'https://devin.example.com/'
+};
+
+test('config reads only host settings and validates PUBLIC_URL', () => {
+  const config = loadConfig({ ...hostEnv, DATA_DIR: '/data' });
+  assert.equal(config.publicUrl, 'https://devin.example.com');
+  assert.equal(config.port, 3000);
   assert.equal(config.pollIntervalMs, 30_000);
   assert.equal(config.databasePath, '/data/tasks.db');
-  assert.equal(loadConfig({ DISCORD_TOKEN: 't', TRIGGER_EMOJI: '' }).triggerEmoji, null);
+  assert.equal(loadConfig({ ...hostEnv, PUBLIC_URL: 'http://localhost:3000' }).publicUrl, 'http://localhost:3000');
+  assert.throws(() => loadConfig({ ...hostEnv, PUBLIC_URL: 'http://devin.example.com' }), /must use https/);
   assert.throws(() => loadConfig({}), /DISCORD_TOKEN must be set/);
 });

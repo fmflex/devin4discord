@@ -3,26 +3,36 @@ import {
   ChannelType,
   Client,
   ContextMenuCommandBuilder,
+  DiscordAPIError,
   Events,
   GatewayIntentBits,
   InteractionContextType,
   MessageFlags,
   Partials,
   PermissionFlagsBits,
+  RESTJSONErrorCodes,
   SlashCommandBuilder,
   ThreadAutoArchiveDuration,
   type Attachment as DiscordAttachment,
+  type Channel,
   type ChatInputCommandInteraction,
   type Collection,
   type GuildMember,
   type Message,
   type MessageContextMenuCommandInteraction
 } from 'discord.js';
-import type { Attachment, Person } from './agents/types.ts';
-import type { Bridge, ChatPort, StartResult } from './bridge.ts';
-import type { Config } from './config.ts';
+import type { Bot, ChannelRef, Outcome } from './bot.ts';
+import type { ChatPort } from './bridge.ts';
+import type { Attachment } from './devin.ts';
+import type { ChannelInfo, Directory } from './directory.ts';
+import type { MemberSnapshot } from './permissions.ts';
+import type { TaskStore } from './store.ts';
 
-const COMMAND = 'agent';
+export const COMMAND = 'devin';
+export const TRIGGER_EMOJI = '🤖';
+export const IGNORE_PREFIX = '//';
+/** Unprompted DMs (e.g. "not set up yet") go to the same person at most this often per server. */
+const DM_COOLDOWN_MS = 10 * 60 * 1000;
 
 export function createClient() {
   return new Client({
@@ -82,16 +92,26 @@ export function discordChat(client: Client): ChatPort {
   };
 }
 
-export function commandDefinitions(agentName: string) {
+/** Bot permissions requested by the "Add to Discord" link. */
+export const BOT_PERMISSIONS =
+  PermissionFlagsBits.ViewChannel |
+  PermissionFlagsBits.SendMessages |
+  PermissionFlagsBits.SendMessagesInThreads |
+  PermissionFlagsBits.CreatePublicThreads |
+  PermissionFlagsBits.ReadMessageHistory |
+  PermissionFlagsBits.AddReactions |
+  PermissionFlagsBits.EmbedLinks;
+
+/** Who may run the commands is decided per server by role settings, so they're visible to everyone. */
+export function commandDefinitions() {
   const slash = new SlashCommandBuilder()
     .setName(COMMAND)
-    .setDescription(`Start and follow ${agentName} tasks`)
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDescription('Start and follow Devin tasks')
     .setContexts(InteractionContextType.Guild)
     .addSubcommand((sub) =>
       sub
         .setName('start')
-        .setDescription(`Give ${agentName} a task`)
+        .setDescription('Give Devin a task')
         .addStringOption((option) =>
           option.setName('task').setDescription('What to do').setRequired(true).setMaxLength(4000)
         )
@@ -102,133 +122,202 @@ export function commandDefinitions(agentName: string) {
     .addSubcommand((sub) =>
       sub.setName('status').setDescription("Status and PRs of this thread's task")
     )
-    .addSubcommand((sub) => sub.setName('list').setDescription('Recent tasks'));
+    .addSubcommand((sub) => sub.setName('list').setDescription('Recent tasks in this server'));
   const contextMenu = new ContextMenuCommandBuilder()
-    .setName(`Send to ${agentName}`)
+    .setName('Send to Devin')
     .setType(ApplicationCommandType.Message)
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .setContexts(InteractionContextType.Guild);
   return [slash.toJSON(), contextMenu.toJSON()];
 }
 
-function isAllowed(member: GuildMember, config: Config) {
-  return (
-    member.permissions.has(PermissionFlagsBits.Administrator) ||
-    config.allowedRoleIds.some((roleId) => member.roles.cache.has(roleId))
-  );
+export function memberSnapshot(member: GuildMember): MemberSnapshot {
+  const roleIds = new Set(member.roles.cache.keys());
+  roleIds.add(member.guild.id);
+  return {
+    id: member.id,
+    name: member.displayName,
+    roleIds: [...roleIds],
+    isAdmin: member.permissions.has(PermissionFlagsBits.Administrator),
+    canManageGuild: member.permissions.has(PermissionFlagsBits.ManageGuild)
+  };
 }
 
-function person(member: GuildMember): Person {
-  return { discordId: member.id, name: member.displayName };
+function channelRef(channel: Channel | null, fallbackId: string): ChannelRef {
+  if (channel?.isThread()) return { id: channel.id, parentId: channel.parentId };
+  return { id: channel?.id ?? fallbackId, parentId: null };
+}
+
+const CHANNEL_KINDS: Partial<Record<ChannelType, ChannelInfo['kind']>> = {
+  [ChannelType.GuildText]: 'text',
+  [ChannelType.GuildAnnouncement]: 'announcement',
+  [ChannelType.GuildForum]: 'forum'
+};
+
+/** The setup UI's view of servers, read live through the bot. */
+export function discordDirectory(client: Client): Directory {
+  return {
+    hasGuild: (guildId) => client.guilds.cache.has(guildId),
+    guildName: (guildId) => client.guilds.cache.get(guildId)?.name ?? null,
+    async member(guildId, userId) {
+      const guild = client.guilds.cache.get(guildId);
+      if (!guild) return null;
+      try {
+        return memberSnapshot(await guild.members.fetch(userId));
+      } catch (error) {
+        if (error instanceof DiscordAPIError && error.code === RESTJSONErrorCodes.UnknownMember) {
+          return null;
+        }
+        throw error;
+      }
+    },
+    async roles(guildId) {
+      const guild = client.guilds.cache.get(guildId);
+      if (!guild) return [];
+      const roles = await guild.roles.fetch();
+      return [...roles.values()].map((role) => ({
+        id: role.id,
+        name: role.id === guild.id ? '@everyone' : role.name,
+        color: role.color,
+        position: role.position,
+        managed: role.managed
+      }));
+    },
+    async channels(guildId) {
+      const guild = client.guilds.cache.get(guildId);
+      if (!guild) return [];
+      const channels = await guild.channels.fetch();
+      const result: ChannelInfo[] = [];
+      for (const channel of channels.values()) {
+        const kind = channel && CHANNEL_KINDS[channel.type];
+        if (!channel || !kind) continue;
+        result.push({
+          id: channel.id,
+          name: channel.name,
+          kind,
+          category: channel.parent?.name ?? null,
+          position: channel.parent ? channel.parent.position * 1000 + channel.position : channel.position
+        });
+      }
+      return result;
+    }
+  };
 }
 
 function attachments(files: Collection<string, DiscordAttachment> | DiscordAttachment[]): Attachment[] {
   return [...files.values()].map((file) => ({ url: file.url, filename: file.name }));
 }
 
-function startedReply(result: StartResult, agentName: string) {
-  return result.started
-    ? `${agentName} task started: <#${result.threadId}>`
-    : `That message already has a task: <#${result.threadId}>`;
-}
-
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function wireDiscord(client: Client, bridge: Bridge, config: Config) {
-  const startFromMessage = (message: Message<true>, opener: GuildMember) =>
-    bridge.start({
-      kind: 'message',
-      opener: person(opener),
-      channelId: config.taskChannelId ?? message.channelId,
-      message: {
-        id: message.id,
-        authorName: message.member?.displayName ?? message.author.username,
-        authorId: message.author.id,
-        link: message.url,
-        content: message.content,
-        attachments: attachments(message.attachments)
+function forwarded(message: Message<true>) {
+  return {
+    id: message.id,
+    authorName: message.member?.displayName ?? message.author.username,
+    authorId: message.author.id,
+    link: message.url,
+    content: message.content,
+    attachments: attachments(message.attachments)
+  };
+}
+
+/** Tasks from before servers were tracked get their guild from their thread. */
+export async function backfillTaskGuilds(client: Client, tasks: TaskStore) {
+  for (const row of tasks.withoutGuild()) {
+    try {
+      const channel = await client.channels.fetch(row.threadId);
+      if (channel && 'guildId' in channel && channel.guildId) {
+        tasks.update(row.taskId, { guildId: channel.guildId });
       }
-    });
+    } catch (error) {
+      console.error(`Looking up the server of task ${row.taskId} failed:`, errorText(error));
+    }
+  }
+}
+
+export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore) {
+  const lastDm = new Map<string, number>();
+  async function dmOnce(guildId: string, userId: string, text: string) {
+    const key = `${guildId}:${userId}`;
+    const now = Date.now();
+    if ((lastDm.get(key) ?? 0) > now - DM_COOLDOWN_MS) return;
+    lastDm.set(key, now);
+    const user = await client.users.fetch(userId);
+    await user.send({ content: text, allowedMentions: { parse: [] } }).catch(() => {});
+  }
 
   client.once(Events.ClientReady, async (ready) => {
-    console.log(`Logged in as ${ready.user.tag}; agent: ${bridge.agentName}.`);
-    const definitions = commandDefinitions(bridge.agentName);
-    if (config.guildId) {
-      await ready.application.commands.set(definitions, config.guildId);
-    } else {
-      await ready.application.commands.set(definitions);
-    }
-    console.log(`Registered commands ${config.guildId ? `in guild ${config.guildId}` : 'globally'}.`);
+    console.log(`Logged in as ${ready.user.tag} in ${ready.guilds.cache.size} servers.`);
+    await ready.application.commands.set(commandDefinitions());
+    console.log('Registered commands globally.');
+    await backfillTaskGuilds(client, tasks);
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.inCachedGuild()) return;
     if (!interaction.isChatInputCommand() && !interaction.isMessageContextMenuCommand()) return;
-    if (!isAllowed(interaction.member, config)) {
-      await interaction.reply({ content: 'Only admins can use this.', flags: MessageFlags.Ephemeral });
-      return;
-    }
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     try {
-      const content = interaction.isMessageContextMenuCommand()
-        ? await handleContextMenu(interaction)
-        : await handleSlash(interaction);
-      await interaction.editReply({ content, allowedMentions: { parse: [] } });
+      const member = memberSnapshot(interaction.member);
+      const outcome = interaction.isMessageContextMenuCommand()
+        ? await handleContextMenu(interaction, member)
+        : await handleSlash(interaction, member);
+      await interaction.editReply({ content: outcome.reply, allowedMentions: { parse: [] } });
     } catch (error) {
       console.error('Command failed:', error);
       await interaction.editReply(`Failed: ${errorText(error)}`).catch(() => {});
     }
   });
 
-  async function handleContextMenu(interaction: MessageContextMenuCommandInteraction<'cached'>) {
-    const result = await startFromMessage(interaction.targetMessage, interaction.member);
-    return startedReply(result, bridge.agentName);
+  function handleContextMenu(
+    interaction: MessageContextMenuCommandInteraction<'cached'>,
+    member: MemberSnapshot
+  ) {
+    const message = interaction.targetMessage;
+    return bot.startFromMessage(
+      interaction.guildId,
+      member,
+      channelRef(message.channel, message.channelId),
+      forwarded(message)
+    );
   }
 
-  async function handleSlash(interaction: ChatInputCommandInteraction<'cached'>) {
+  async function handleSlash(
+    interaction: ChatInputCommandInteraction<'cached'>,
+    member: MemberSnapshot
+  ): Promise<Outcome> {
     const sub = interaction.options.getSubcommand();
     if (sub === 'start') {
       const file = interaction.options.getAttachment('file');
-      const result = await bridge.start({
-        kind: 'prompt',
-        opener: person(interaction.member),
-        channelId: config.taskChannelId ?? interaction.channelId,
-        task: interaction.options.getString('task', true),
-        attachments: file ? attachments([file]) : []
-      });
-      return startedReply(result, bridge.agentName);
+      return bot.startFromPrompt(
+        interaction.guildId,
+        member,
+        channelRef(interaction.channel, interaction.channelId),
+        interaction.options.getString('task', true),
+        file ? attachments([file]) : []
+      );
     }
-    if (sub === 'status') {
-      const row = bridge.task(interaction.channelId);
-      if (!row) return 'Run this inside a task thread.';
-      const update = await bridge.sync(row);
-      const prs = (update?.pullRequests ?? row.pullRequests).join('\n') || 'none yet';
-      return `**${row.title}**\nStatus: ${update?.stateLabel ?? row.stateLabel ?? 'unknown'}\nTask: ${row.url}\nPull requests:\n${prs}`;
-    }
-    const rows = bridge.recent(10);
-    if (!rows.length) return 'No tasks yet.';
-    return rows
-      .map((row) => {
-        const prs = row.pullRequests.length ? ` · ${row.pullRequests.join(' ')}` : '';
-        return `<#${row.threadId}> · ${row.stateLabel ?? 'starting'}${prs}`;
-      })
-      .join('\n')
-      .slice(0, 2000);
+    if (sub === 'status') return bot.status(interaction.guildId, member, interaction.channelId);
+    return bot.list(interaction.guildId, member);
   }
 
   client.on(Events.MessageReactionAdd, async (reaction, user) => {
-    if (!config.triggerEmoji || user.bot) return;
+    if (user.bot || reaction.emoji.name !== TRIGGER_EMOJI) return;
     try {
-      const emoji = reaction.emoji;
-      if (emoji.name !== config.triggerEmoji && emoji.id !== config.triggerEmoji) return;
       const message = reaction.message.partial ? await reaction.message.fetch() : reaction.message;
-      if (!message.inGuild() || bridge.isTaskThread(message.channelId)) return;
+      if (!message.inGuild() || bot.isTaskThread(message.channelId)) return;
       const member = await message.guild.members.fetch(user.id);
-      if (!isAllowed(member, config)) return;
-      const result = await startFromMessage(message, member);
-      if (result.started) await message.react('✅').catch(() => {});
+      const outcome = await bot.startFromMessage(
+        message.guildId,
+        memberSnapshot(member),
+        channelRef(message.channel, message.channelId),
+        forwarded(message)
+      );
+      if (outcome.ok && outcome.started) await message.react('✅').catch(() => {});
+      if (!outcome.ok && (outcome.reason === 'unconfigured' || outcome.reason === 'limit')) {
+        await dmOnce(message.guildId, user.id, outcome.reply);
+      }
     } catch (error) {
       console.error('Starting a task from a reaction failed:', error);
     }
@@ -236,19 +325,22 @@ export function wireDiscord(client: Client, bridge: Bridge, config: Config) {
 
   client.on(Events.MessageCreate, async (message) => {
     if (message.author.bot || !message.inGuild() || !message.channel.isThread()) return;
-    if (!bridge.isTaskThread(message.channelId)) return;
-    if (config.ignorePrefix && message.content.startsWith(config.ignorePrefix)) return;
+    if (!bot.isTaskThread(message.channelId)) return;
+    if (message.content.startsWith(IGNORE_PREFIX)) return;
     if (!message.content.trim() && message.attachments.size === 0) return;
     try {
       const member = message.member ?? (await message.guild.members.fetch(message.author.id));
-      if (!isAllowed(member, config)) return;
-      await bridge.forward(
+      const outcome = await bot.reply(
+        message.guildId,
+        memberSnapshot(member),
         message.channelId,
-        person(member),
         message.content,
         attachments(message.attachments)
       );
-      await message.react('📨').catch(() => {});
+      if (outcome.ok) await message.react('📨').catch(() => {});
+      else if (outcome.reason === 'unconfigured') {
+        await dmOnce(message.guildId, message.author.id, outcome.reply);
+      }
     } catch (error) {
       console.error('Forwarding a thread message failed:', error);
       await message.reply(`Could not forward this: ${errorText(error)}`).catch(() => {});

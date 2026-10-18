@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DevinAdapter, devinState } from '../src/agents/devin.ts';
+import { DevinClient, devinState, verifyDevinCredentials } from '../src/devin.ts';
 
 type Call = { url: string; method: string; body: unknown; auth: string | null };
 
@@ -25,15 +25,13 @@ function fakeFetch(routes: Record<string, unknown>) {
 const base = '/v3/organizations/org-1';
 
 function adapter(impl: typeof fetch) {
-  return new DevinAdapter(
+  return new DevinClient(
     {
       apiKey: 'cog_test',
       orgId: 'org-1',
       baseUrl: 'https://devin.test/',
-      maxAcuLimit: 10,
       repos: ['acme/app'],
-      tags: ['team'],
-      userMap: new Map([['42', 'user-devin-42']])
+      userMap: { '42': 'user-devin-42' }
     },
     impl
   );
@@ -47,7 +45,9 @@ test('startTask sends the prompt, attachments, limits and the mapped Devin user'
     prompt: 'fix it',
     title: 'Fix it',
     attachments: [{ url: 'https://cdn.discordapp.com/a.png', filename: 'a.png' }],
-    requestedBy: { discordId: '42', name: 'Jo' }
+    requestedBy: { discordId: '42', name: 'Jo' },
+    guildId: '900',
+    maxAcu: 10
   });
   assert.deepEqual(task, { id: 'devin-abc', url: 'https://app.devin.ai/sessions/abc' });
   assert.equal(calls[0].url, `https://devin.test${base}/sessions`);
@@ -55,7 +55,7 @@ test('startTask sends the prompt, attachments, limits and the mapped Devin user'
   assert.deepEqual(calls[0].body, {
     prompt: 'fix it',
     title: 'Fix it',
-    tags: ['discord', 'team'],
+    tags: ['discord', 'discord-guild:900', 'discord-user:42'],
     repos: ['acme/app'],
     max_acu_limit: 10,
     create_as_user_id: 'user-devin-42',
@@ -115,4 +115,20 @@ test('devinState maps Devin statuses', () => {
   assert.equal(devinState({ status: 'exit' }).state, 'ended');
   assert.equal(devinState({ status: 'error' }).state, 'failed');
   assert.equal(devinState({ status: 'new' }).state, 'starting');
+});
+
+test('verifyDevinCredentials checks the key read-only and rejects bad keys or orgs', async () => {
+  const ok = fakeFetch({
+    'GET /v3/self': { principal_type: 'service_user', service_user_name: 'bot', org_id: 'org-1' },
+    [`GET ${base}/sessions`]: { items: [] }
+  });
+  const input = { apiKey: 'cog_test', orgId: 'org-1', baseUrl: 'https://devin.test' };
+  assert.deepEqual(await verifyDevinCredentials(input, ok.impl), { name: 'bot' });
+  assert.deepEqual(ok.calls.map((c) => c.method), ['GET', 'GET']);
+  assert.equal(ok.calls[1].url, `https://devin.test${base}/sessions?first=1`);
+
+  await assert.rejects(verifyDevinCredentials({ ...input, orgId: 'org-2' }, ok.impl), /belongs to organization org-1/);
+
+  const denied = (async () => new Response('{}', { status: 401 })) as typeof fetch;
+  await assert.rejects(verifyDevinCredentials(input, denied), /rejected this API key/);
 });

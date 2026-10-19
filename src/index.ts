@@ -68,7 +68,16 @@ process.on('unhandledRejection', (reason) => {
 });
 process.on('SIGINT', shutdown);
 
-await client.login(config.discordToken);
+try {
+  await client.login(config.discordToken);
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`Discord login failed: ${message}`);
+  if (/disallowed intents/i.test(message)) {
+    console.error('Turn on "Message Content Intent" under Bot -> Privileged Gateway Intents in the Discord Developer Portal.');
+  }
+  process.exit(1);
+}
 
 while (!stopping) {
   await sleep(config.pollIntervalMs);

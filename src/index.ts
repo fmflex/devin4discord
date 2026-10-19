@@ -62,6 +62,10 @@ async function shutdown() {
   process.exit(0);
 }
 process.on('SIGTERM', shutdown);
+// A failed Discord or Devin call in an event handler must not take the whole bot down.
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection:', reason instanceof Error ? reason.message : String(reason));
+});
 process.on('SIGINT', shutdown);
 
 await client.login(config.discordToken);

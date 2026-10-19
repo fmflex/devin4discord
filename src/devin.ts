@@ -39,7 +39,10 @@ export type TaskUpdate = {
 };
 
 /** What the bridge needs from Devin; tests pass fakes. */
-export type DevinApi = Pick<DevinClient, 'startTask' | 'sendMessage' | 'getUpdate'>;
+export type DevinApi = Pick<
+  DevinClient,
+  'startTask' | 'sendMessage' | 'getUpdate' | 'terminate' | 'sleep' | 'unarchive'
+>;
 
 export const DEFAULT_DEVIN_API_URL = 'https://api.devin.ai';
 
@@ -225,6 +228,24 @@ export class DevinClient {
       cursor: all.at(-1)?.event_id ?? cursor,
       pullRequests: (session.pull_requests ?? []).map((pr) => pr.pr_url)
     };
+  }
+
+  /** `DELETE /v3/organizations/{org}/sessions/{id}`. A terminated session can't be resumed. */
+  async terminate(taskId: string) {
+    await this.request(`/sessions/${encodeURIComponent(taskId)}`, 'DELETE');
+  }
+
+  /**
+   * `POST .../sessions/{id}/archive`: archives the session and puts it to sleep if
+   * it's running. v3 has no sleep-only call; a message wakes an archived session.
+   */
+  async sleep(taskId: string) {
+    await this.request(`/sessions/${encodeURIComponent(taskId)}/archive`, 'POST');
+  }
+
+  /** `POST .../sessions/{id}/unarchive`, after a reply wakes a session we put to sleep. */
+  async unarchive(taskId: string) {
+    await this.request(`/sessions/${encodeURIComponent(taskId)}/unarchive`, 'POST');
   }
 
   private async listMessages(sessionId: string) {

@@ -207,3 +207,20 @@ test('dev login is only enabled with NODE_ENV=development and DEV_LOGIN_GUILD_ID
   });
   assert.equal((await prod.request(`${PUBLIC}/auth/dev`)).status, 404);
 });
+
+test('the channels page saves the mention settings and rejects bad context counts', async () => {
+  const t = setup();
+  const { session, csrf } = await signIn(t);
+  const path = `/g/${G}/channels`;
+  const page = await (await t.request(path, { headers: { cookie: session } })).text();
+  assert.match(page, /name="context_messages"[^>]*value="10"/);
+  assert.match(page, /Only forward messages that @mention Devin/);
+  assert.equal((await post(t, path, session, { _csrf: csrf, context_messages: '51' })).status, 400);
+  assert.equal((await post(t, path, session, { _csrf: csrf, context_messages: '-1' })).status, 400);
+  assert.equal(t.guilds.settings(G)?.contextMessages ?? 10, 10);
+  const ok = await post(t, path, session, { _csrf: csrf, context_messages: '0', mention_only: 'on' });
+  assert.equal(ok.status, 302);
+  assert.equal(t.guilds.settings(G)?.contextMessages, 0);
+  assert.equal(t.guilds.settings(G)?.mentionOnlyReplies, true);
+  assert.match(t.guilds.auditLog(G)[0].detail, /context messages: 0; only @mentions forwarded: yes/);
+});

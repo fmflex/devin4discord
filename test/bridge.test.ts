@@ -5,7 +5,7 @@ import { openDatabase } from '../src/db.ts';
 import type { DevinApi, StartTaskInput, TaskUpdate } from '../src/devin.ts';
 import { TaskStore } from '../src/store.ts';
 
-type Sent = { channelId: string; content: string; ping?: string };
+type Sent = { channelId: string; content: string; ping?: string; buttons?: string[] };
 
 function setup() {
   const sent: Sent[] = [];
@@ -13,6 +13,8 @@ function setup() {
   const threads: { channelId: string; title: string; intro: string }[] = [];
   const started: StartTaskInput[] = [];
   const forwarded: { taskId: string; text: string }[] = [];
+  const threadsOnMessage: { channelId: string; messageId: string; title: string }[] = [];
+  const controls: string[] = [];
   const updates = new Map<string, TaskUpdate | Error>();
   let nextTask = 1;
 
@@ -21,11 +23,15 @@ function setup() {
       threads.push({ channelId, title, intro });
       return `thread-${threads.length}`;
     },
+    async createThreadOnMessage(channelId, messageId, title) {
+      threadsOnMessage.push({ channelId, messageId, title });
+      return `thread-on-${messageId}`;
+    },
     async addThreadMember(threadId, userId) {
       members.push([threadId, userId]);
     },
-    async send(channelId, content, ping) {
-      sent.push({ channelId, content, ...(ping ? { ping } : {}) });
+    async send(channelId, content, ping, buttons) {
+      sent.push({ channelId, content, ...(ping ? { ping } : {}), ...(buttons ? { buttons: buttons.map((b) => b.customId) } : {}) });
     }
   };
   const devin: DevinApi = {
@@ -37,6 +43,15 @@ function setup() {
     async sendMessage(taskId, input) {
       forwarded.push({ taskId, text: input.text });
     },
+    async terminate(taskId) {
+      controls.push(`terminate ${taskId}`);
+    },
+    async sleep(taskId) {
+      controls.push(`sleep ${taskId}`);
+    },
+    async unarchive(taskId) {
+      controls.push(`unarchive ${taskId}`);
+    },
     async getUpdate(taskId) {
       const update = updates.get(taskId);
       if (!update) throw new Error(`no update for ${taskId}`);
@@ -46,7 +61,7 @@ function setup() {
   };
   const store = new TaskStore(openDatabase(':memory:'));
   const bridge = new Bridge({ devin: (guildId) => (guildId === 'g1' ? devin : null), store, chat, ignorePrefix: '//' });
-  return { bridge, store, sent, members, threads, started, forwarded, updates };
+  return { bridge, store, sent, members, threads, threadsOnMessage, started, forwarded, updates, controls };
 }
 
 const opener = { discordId: '10', name: 'Admin' };
@@ -176,4 +191,70 @@ test('tasks record their server and fail in a server without Devin', async () =>
     t.bridge.start({ kind: 'prompt', ...base, guildId: 'g2', channelId: 'chan', task: 'x', attachments: [] }),
     /not set up/
   );
+});
+
+const mention = {
+  kind: 'mention' as const,
+  ...base,
+  channelId: 'chan',
+  message: { ...message, content: '<@800> the button does nothing' },
+  text: 'the button does nothing',
+  context: {
+    repliedTo: { ...message, id: undefined, authorName: 'Bob', content: 'see this', attachments: [{ url: 'https://cdn.test/b.png', filename: 'b.png' }] },
+    recent: []
+  },
+  threadOnMessage: true
+};
+
+test('a mention opens the thread on the message and posts Stop / Sleep buttons', async () => {
+  const t = setup();
+  const result = await t.bridge.start(mention);
+  assert.deepEqual(result, { started: true, threadId: 'thread-on-msg-1', url: 'https://agent.test/task-1' });
+  assert.deepEqual(t.threadsOnMessage, [{ channelId: 'chan', messageId: 'msg-1', title: 'Devin: the button does nothing' }]);
+  assert.equal(t.threads.length, 0);
+  assert.match(t.started[0].prompt, /Admin asked you on Discord.*\n\nthe button does nothing/);
+  assert.match(t.started[0].prompt, /<untrusted_discord_context>[\s\S]*Bob[\s\S]*see this/);
+  assert.deepEqual(t.started[0].attachments.map((file) => file.filename), ['shot.png', 'b.png']);
+  assert.match(t.sent[0].content, /Started by <@10>/);
+  assert.deepEqual(t.sent.at(-1)?.buttons, ['devin:stop:task-1', 'devin:sleep:task-1']);
+});
+
+test('stop terminates the session, ends the sync and refuses later replies', async () => {
+  const t = setup();
+  await t.bridge.start({ kind: 'prompt', ...base, channelId: 'chan', task: 'x', attachments: [] });
+  const row = t.store.byThread('thread-1')!;
+  await t.bridge.stop(row, { discordId: '5', name: 'Mod' });
+  assert.deepEqual(t.controls, ['terminate task-1']);
+  assert.equal(t.sent.at(-1)?.content, 'Stopped by <@5>.');
+  const after = t.store.byThread('thread-1')!;
+  assert.equal(after.stoppedBy, '5');
+  assert.equal(after.active, false);
+  assert.deepEqual(t.store.active(), []);
+  assert.equal(await t.bridge.forward('thread-1', opener, 'more', []), false);
+  assert.deepEqual(t.forwarded, []);
+});
+
+test('a sync that finishes after a stop does not revive the task', async () => {
+  const t = setup();
+  await t.bridge.start({ kind: 'prompt', ...base, channelId: 'chan', task: 'x', attachments: [] });
+  const row = t.store.byThread('thread-1')!;
+  t.updates.set('task-1', update({ state: 'waiting', stateLabel: 'waiting for a reply' }));
+  await t.bridge.stop(row, opener);
+  await t.bridge.sync(row);
+  assert.equal(t.store.byThread('thread-1')?.active, false);
+  assert.ok(!t.sent.some((sent) => /waiting for a reply/.test(sent.content)));
+});
+
+test('after sleep the next reply wakes Devin and unarchives the session', async () => {
+  const t = setup();
+  await t.bridge.start({ kind: 'prompt', ...base, channelId: 'chan', task: 'x', attachments: [] });
+  await t.bridge.sleep(t.store.byThread('thread-1')!, opener);
+  assert.equal(t.sent.at(-1)?.content, 'Put to sleep by <@10>. A reply in this thread wakes Devin.');
+  assert.equal(t.store.byThread('thread-1')?.sleptBy, '10');
+  assert.equal(await t.bridge.forward('thread-1', opener, 'wake up', []), true);
+  assert.deepEqual(t.forwarded, [{ taskId: 'task-1', text: 'wake up' }]);
+  assert.deepEqual(t.controls, ['sleep task-1', 'unarchive task-1']);
+  assert.equal(t.store.byThread('thread-1')?.sleptBy, null);
+  await t.bridge.forward('thread-1', opener, 'again', []);
+  assert.deepEqual(t.controls, ['sleep task-1', 'unarchive task-1']);
 });

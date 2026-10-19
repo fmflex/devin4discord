@@ -3,20 +3,27 @@ import {
   chunkMessage,
   forwardedMessagePrompt,
   isFinalState,
+  mentionPrompt,
   shortTitle,
   stateAnnouncement,
   taskPrompt,
-  type ForwardedMessage
+  type ForwardedMessage,
+  type MentionContext
 } from './format.ts';
 import type { TaskRow, TaskStore } from './store.ts';
+import { controlId } from './triggers.ts';
+
+export type ChatButton = { customId: string; label: string; style: 'danger' | 'secondary' };
 
 /** The Discord operations the bridge needs; implemented with discord.js. */
 export interface ChatPort {
   /** Posts `intro` in the channel and opens a thread on it. */
   createTaskThread(channelId: string, title: string, intro: string): Promise<string>;
+  /** Opens a thread on an existing message, e.g. the one that @mentioned the bot. */
+  createThreadOnMessage(channelId: string, messageId: string, title: string): Promise<string>;
   addThreadMember(threadId: string, userId: string): Promise<void>;
   /** Posts one message; mentions are only allowed for `pingUserId`. */
-  send(channelId: string, content: string, pingUserId?: string): Promise<void>;
+  send(channelId: string, content: string, pingUserId?: string, buttons?: ChatButton[]): Promise<void>;
 }
 
 export type StartRequest = {
@@ -29,11 +36,29 @@ export type StartRequest = {
 } & (
   | { kind: 'message'; message: ForwardedMessage & { id: string } }
   | { kind: 'prompt'; task: string; attachments: Attachment[] }
+  | {
+      kind: 'mention';
+      /** The requester's message; `text` is its content without the mention. */
+      message: ForwardedMessage & { id: string };
+      text: string;
+      context: MentionContext;
+      /** Open the thread on the message itself rather than posting a new one. */
+      threadOnMessage: boolean;
+    }
 );
+
+export function controlButtons(taskId: string): ChatButton[] {
+  return [
+    { customId: controlId('stop', taskId), label: 'Stop', style: 'danger' },
+    { customId: controlId('sleep', taskId), label: 'Sleep', style: 'secondary' }
+  ];
+}
 
 export type StartResult =
   | { started: true; threadId: string; url: string }
   | { started: false; threadId: string };
+
+const SLEEP_LABEL = 'asleep (a reply wakes it)';
 
 /** Returns the server's Devin client, or null when the server isn't set up. */
 export type DevinResolver = (guildId: string) => DevinApi | null;
@@ -58,23 +83,34 @@ export class Bridge {
   }
 
   async start(request: StartRequest): Promise<StartResult> {
-    if (request.kind === 'message') {
+    if (request.kind !== 'prompt') {
       const existing = this.store.bySourceMessage(request.message.id);
       if (existing) return { started: false, threadId: existing.threadId };
     }
     const devin = this.devin(request.guildId);
     if (!devin) throw new Error('Devin is not set up in this server.');
-    const forwarded = request.kind === 'message' ? request.message : null;
-    const title =
-      request.kind === 'message'
-        ? shortTitle(`${request.message.authorName}: ${request.message.content || 'attachment'}`)
-        : shortTitle(request.task);
-    const attachments =
-      request.kind === 'message' ? request.message.attachments : request.attachments;
-    const prompt =
-      request.kind === 'message'
-        ? forwardedMessagePrompt(request.message, request.opener, request.instructions)
-        : taskPrompt(request.task, request.opener, request.instructions);
+    const forwarded = request.kind === 'prompt' ? null : request.message;
+    let title: string;
+    let attachments: Attachment[];
+    let prompt: string;
+    if (request.kind === 'message') {
+      title = shortTitle(`${request.message.authorName}: ${request.message.content || 'attachment'}`);
+      attachments = request.message.attachments;
+      prompt = forwardedMessagePrompt(request.message, request.opener, request.instructions);
+    } else if (request.kind === 'mention') {
+      title = shortTitle(request.text || request.context.repliedTo?.content || 'Discord request');
+      attachments = [...request.message.attachments, ...(request.context.repliedTo?.attachments ?? [])];
+      prompt = mentionPrompt(
+        { text: request.text, link: request.message.link, attachments: request.message.attachments },
+        request.context,
+        request.opener,
+        request.instructions
+      );
+    } else {
+      title = shortTitle(request.task);
+      attachments = request.attachments;
+      prompt = taskPrompt(request.task, request.opener, request.instructions);
+    }
 
     const task = await devin.startTask({
       prompt,
@@ -85,11 +121,14 @@ export class Bridge {
       maxAcu: request.maxAcu
     });
     const source = forwarded ? ` from ${forwarded.link}` : '';
-    const threadId = await this.chat.createTaskThread(
-      request.channelId,
-      `Devin: ${title}`,
-      `**${title}**\nStarted by <@${request.opener.discordId}>${source}\n${task.url}`
-    );
+    const intro = `**${title}**\nStarted by <@${request.opener.discordId}>${source}\n${task.url}`;
+    let threadId: string;
+    if (request.kind === 'mention' && request.threadOnMessage) {
+      threadId = await this.chat.createThreadOnMessage(request.channelId, request.message.id, `Devin: ${title}`);
+      await this.post(threadId, intro);
+    } else {
+      threadId = await this.chat.createTaskThread(request.channelId, `Devin: ${title}`, intro);
+    }
     this.store.insert({
       taskId: task.id,
       guildId: request.guildId,
@@ -107,13 +146,37 @@ export class Bridge {
       : '';
     await this.post(
       threadId,
-      `Devin is on it. Reply in this thread to give it feedback, images included.${aside}`
+      `Devin is on it. Reply in this thread to give it feedback, images included.${aside}`,
+      undefined,
+      controlButtons(task.id)
     );
     return { started: true, threadId, url: task.url };
   }
 
   task(threadId: string) {
     return this.store.byThread(threadId);
+  }
+
+  /** Ends the Devin session for good; the thread gets no more syncs or replies. */
+  async stop(row: TaskRow, by: Person) {
+    const devin = this.requireDevin(row);
+    await devin.terminate(row.taskId);
+    this.store.update(row.taskId, { stoppedBy: by.discordId, active: false, stateLabel: 'stopped' });
+    await this.post(row.threadId, `Stopped by <@${by.discordId}>.`);
+  }
+
+  /** Puts the session to sleep; the next forwarded reply wakes it. */
+  async sleep(row: TaskRow, by: Person) {
+    const devin = this.requireDevin(row);
+    await devin.sleep(row.taskId);
+    this.store.update(row.taskId, { sleptBy: by.discordId, stateLabel: SLEEP_LABEL });
+    await this.post(row.threadId, `Put to sleep by <@${by.discordId}>. A reply in this thread wakes Devin.`);
+  }
+
+  private requireDevin(row: TaskRow) {
+    const devin = row.guildId ? this.devin(row.guildId) : null;
+    if (!devin) throw new Error('Devin is not set up in this server.');
+    return devin;
   }
 
   /** Forwards a thread message to the thread's task. False if none. */
@@ -124,15 +187,23 @@ export class Bridge {
     attachments: Attachment[]
   ): Promise<boolean> {
     const row = this.store.byThread(threadId);
-    if (!row?.guildId) return false;
-    const devin = this.devin(row.guildId);
-    if (!devin) throw new Error('Devin is not set up in this server.');
+    if (!row?.guildId || row.stoppedBy) return false;
+    const devin = this.requireDevin(row);
+    // A message wakes a sleeping session (Devin API v3, Archive Session).
     await devin.sendMessage(row.taskId, {
       text: text.trim() || '(see the attached files)',
       attachments,
       from
     });
-    if (!row.active) this.store.update(row.taskId, { active: true });
+    if (row.sleptBy) {
+      // Sleep archived the session; take it back out of the archive now it's awake.
+      await devin.unarchive(row.taskId).catch((error) => {
+        console.error(`Unarchiving task ${row.taskId} failed:`, error);
+      });
+      this.store.update(row.taskId, { sleptBy: null, active: true });
+    } else if (!row.active) {
+      this.store.update(row.taskId, { active: true });
+    }
     return true;
   }
 
@@ -177,6 +248,8 @@ export class Bridge {
         update.stateLabel,
         'Devin'
       );
+      // Stopped while this sync was in flight: don't revive it.
+      if (this.store.byId(row.taskId)?.stoppedBy) return update;
       if (announcement) await this.post(row.threadId, announcement, row.openerId);
       this.store.update(row.taskId, {
         cursor: update.cursor,
@@ -189,10 +262,16 @@ export class Bridge {
     }
   }
 
-  private async post(channelId: string, content: string, pingUserId?: string) {
+  private async post(channelId: string, content: string, pingUserId?: string, buttons?: ChatButton[]) {
     const chunks = chunkMessage(pingUserId ? `<@${pingUserId}> ${content}` : content);
     for (let index = 0; index < chunks.length; index++) {
-      await this.chat.send(channelId, chunks[index], index === 0 ? pingUserId : undefined);
+      const last = index === chunks.length - 1;
+      await this.chat.send(
+        channelId,
+        chunks[index],
+        index === 0 ? pingUserId : undefined,
+        last ? buttons : undefined
+      );
     }
   }
 }

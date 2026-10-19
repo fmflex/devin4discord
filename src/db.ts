@@ -89,7 +89,13 @@ export const MIGRATIONS: string[] = [
      csrf_token text not null,
      created_at integer not null,
      expires_at integer not null
-   );`
+   );`,
+
+  // 3: mentions, stop and sleep.
+  `alter table tasks add column stopped_by text;
+   alter table tasks add column slept_by text;
+   alter table guilds add column context_messages integer not null default 10;
+   alter table guilds add column mention_only_replies integer not null default 0;`
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

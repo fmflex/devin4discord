@@ -12,6 +12,10 @@ export type TaskRow = {
   cursor: string | null;
   pullRequests: string[];
   active: boolean;
+  /** Discord ID of whoever stopped the task; stopped tasks get no more syncs or replies. */
+  stoppedBy: string | null;
+  /** Discord ID of whoever put the task to sleep; cleared when a reply wakes it. */
+  sleptBy: string | null;
   createdAt: number;
   updatedAt: number;
 };
@@ -28,6 +32,8 @@ type Raw = {
   cursor: string | null;
   pull_requests: string;
   active: number;
+  stopped_by: string | null;
+  slept_by: string | null;
   created_at: number;
   updated_at: number;
 };
@@ -45,6 +51,8 @@ function fromRaw(raw: Raw): TaskRow {
     cursor: raw.cursor,
     pullRequests: JSON.parse(raw.pull_requests) as string[],
     active: raw.active === 1,
+    stoppedBy: raw.stopped_by,
+    sleptBy: raw.slept_by,
     createdAt: raw.created_at,
     updatedAt: raw.updated_at
   };
@@ -56,7 +64,7 @@ export type NewTask = Pick<
 > & { guildId: string };
 
 export type TaskPatch = Partial<
-  Pick<TaskRow, 'stateLabel' | 'cursor' | 'pullRequests' | 'active' | 'guildId'>
+  Pick<TaskRow, 'stateLabel' | 'cursor' | 'pullRequests' | 'active' | 'guildId' | 'stoppedBy' | 'sleptBy'>
 >;
 
 /** Links Devin sessions to Discord threads. */
@@ -85,6 +93,11 @@ export class TaskStore {
         now,
         now
       );
+  }
+
+  byId(taskId: string): TaskRow | null {
+    const raw = this.db.prepare('select * from tasks where task_id = ?').get(taskId);
+    return raw ? fromRaw(raw as Raw) : null;
   }
 
   byThread(threadId: string): TaskRow | null {
@@ -158,6 +171,14 @@ export class TaskStore {
     if (patch.guildId !== undefined) {
       sets.push('guild_id = ?');
       values.push(patch.guildId);
+    }
+    if (patch.stoppedBy !== undefined) {
+      sets.push('stopped_by = ?');
+      values.push(patch.stoppedBy);
+    }
+    if (patch.sleptBy !== undefined) {
+      sets.push('slept_by = ?');
+      values.push(patch.sleptBy);
     }
     sets.push('updated_at = ?');
     values.push(Date.now(), taskId);

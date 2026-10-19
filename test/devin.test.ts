@@ -132,3 +132,20 @@ test('verifyDevinCredentials checks the key read-only and rejects bad keys or or
   const denied = (async () => new Response('{}', { status: 401 })) as typeof fetch;
   await assert.rejects(verifyDevinCredentials(input, denied), /rejected this API key/);
 });
+
+test('stop terminates and sleep archives the session with the documented v3 calls', async () => {
+  const { calls, impl } = fakeFetch({
+    [`DELETE ${base}/sessions/devin-abc`]: {},
+    [`POST ${base}/sessions/devin-abc/archive`]: {},
+    [`POST ${base}/sessions/devin-abc/unarchive`]: {}
+  });
+  const client = adapter(impl);
+  await client.terminate('devin-abc');
+  await client.sleep('devin-abc');
+  await client.unarchive('devin-abc');
+  assert.deepEqual(
+    calls.map((call) => `${call.method} ${new URL(call.url).pathname}${new URL(call.url).search}`),
+    [`DELETE ${base}/sessions/devin-abc`, `POST ${base}/sessions/devin-abc/archive`, `POST ${base}/sessions/devin-abc/unarchive`]
+  );
+  assert.ok(calls.every((call) => call.auth === 'Bearer cog_test' && call.body === undefined));
+});

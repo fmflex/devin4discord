@@ -1,6 +1,8 @@
 import { html, raw } from 'hono/html';
 import type { ChannelInfo, RoleInfo } from '../directory.ts';
-import type { AuditEntry } from '../guilds.ts';
+import { MAX_CONTEXT_MESSAGES, type AuditEntry } from '../guilds.ts';
+
+export type MentionSettings = { contextMessages: number; mentionOnlyReplies: boolean };
 import { PERMISSIONS, PERMISSION_LABELS, type RoleRule } from '../permissions.ts';
 import type { WebSession } from './sessions.ts';
 
@@ -224,6 +226,7 @@ export function channelsPage(
   channels: ChannelInfo[],
   allowed: string[],
   taskChannelId: string | null,
+  mention: MentionSettings,
   notice: PageOptions['notice']
 ) {
   const allowedSet = new Set(allowed);
@@ -240,7 +243,7 @@ export function channelsPage(
     body: html`<form class="card wide" method="post" action="/g/${guild.id}/channels">
       ${csrfField(session)}
       <h2>Channels</h2>
-      <p class="muted"><strong>Allowed</strong>: where the robot reaction, "Send to Devin" and <code>/devin start</code> work. None ticked means every channel.
+      <p class="muted"><strong>Allowed</strong>: where @Devin, the robot reaction, "Send to Devin" and <code>/devin start</code> work. None ticked means every channel.
         <strong>Task channel</strong>: where task threads open; by default the thread opens in the channel the request came from.</p>
       <table class="grid">
         <thead><tr><th>Channel</th><th>Allowed</th><th>Task channel</th></tr></thead>
@@ -259,6 +262,13 @@ export function channelsPage(
           )}
         </tbody>
       </table>
+      <h3>Mentions and replies</h3>
+      <label>Channel messages sent as context with an @Devin mention
+        <input class="narrow" type="number" name="context_messages" min="0" max="${MAX_CONTEXT_MESSAGES}" value="${mention.contextMessages}">
+      </label>
+      <p class="muted small">Devin gets them, and the message being replied to, marked as untrusted context it must not take instructions from.</p>
+      <label class="check"><input type="checkbox" name="mention_only" ${mention.mentionOnlyReplies ? 'checked' : ''}> Only forward messages that @mention Devin</label>
+      <p class="muted small">For busy task threads. When off, every message from members allowed to reply is forwarded.</p>
       <button class="button">Save channels</button>
     </form>`
   });
@@ -313,6 +323,9 @@ main{max-width:1000px;margin:0 auto;padding:24px}
 h1{font-size:22px;margin:0 0 12px}h2{font-size:18px;margin:0 0 8px}
 .muted{color:var(--muted)}.small{font-size:13px}.nowrap{white-space:nowrap}
 label{display:block;margin:14px 0 4px;font-weight:600}
+label.check{display:flex;gap:8px;align-items:center}
+label.check input{width:auto;margin:0}
+input.narrow{max-width:120px;display:block}
 input,textarea{width:100%;margin-top:6px;padding:9px 10px;background:#1e1f22;border:1px solid var(--line);border-radius:4px;color:var(--text);font:inherit;font-weight:400}
 input[type=checkbox],input[type=radio]{width:18px;height:18px;margin:0;accent-color:var(--accent)}
 input.num{width:90px;margin:0;padding:5px 8px}

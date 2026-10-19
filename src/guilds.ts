@@ -228,6 +228,15 @@ export class GuildStore {
     });
   }
 
+  /** Channels Devin may read through MCP; empty means follow the Channels tab. */
+  mcpReadChannels(guildId: string): string[] {
+    return (
+      this.db
+        .prepare('select channel_id from guild_mcp_read_channels where guild_id = ? order by channel_id')
+        .all(guildId) as { channel_id: string }[]
+    ).map((row) => row.channel_id);
+  }
+
   /** Channels Devin may post in through MCP; empty means none. */
   mcpPostChannels(guildId: string): string[] {
     return (
@@ -237,14 +246,19 @@ export class GuildStore {
     ).map((row) => row.channel_id);
   }
 
-  setMcpPostChannels(guildId: string, ids: string[]) {
+  setMcpChannels(guildId: string, read: string[], post: string[]) {
     this.ensure(guildId);
-    const insert = this.db.prepare(
+    const insertRead = this.db.prepare(
+      'insert or ignore into guild_mcp_read_channels (guild_id, channel_id) values (?, ?)'
+    );
+    const insertPost = this.db.prepare(
       'insert or ignore into guild_mcp_post_channels (guild_id, channel_id) values (?, ?)'
     );
     this.transaction(() => {
+      this.db.prepare('delete from guild_mcp_read_channels where guild_id = ?').run(guildId);
       this.db.prepare('delete from guild_mcp_post_channels where guild_id = ?').run(guildId);
-      for (const channelId of ids) insert.run(guildId, channelId);
+      for (const channelId of read) insertRead.run(guildId, channelId);
+      for (const channelId of post) insertPost.run(guildId, channelId);
     });
   }
 

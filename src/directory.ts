@@ -16,6 +16,8 @@ export type ChannelInfo = {
   kind: 'text' | 'announcement' | 'forum';
   category: string | null;
   position: number;
+  /** The bot's own Discord permissions here; absent when unknown. */
+  bot?: { read: boolean; post: boolean };
 };
 
 /** Live server data read through the bot, so the UI never trusts the OAuth guild list alone. */

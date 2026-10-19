@@ -222,16 +222,31 @@ export function discordDirectory(client: Client): Directory {
       const guild = client.guilds.cache.get(guildId);
       if (!guild) return [];
       const channels = await guild.channels.fetch();
+      let me: GuildMember | null;
+      try {
+        me = guild.members.me ?? (await guild.members.fetchMe());
+      } catch {
+        me = null;
+      }
       const result: ChannelInfo[] = [];
       for (const channel of channels.values()) {
         const kind = channel && CHANNEL_KINDS[channel.type];
         if (!channel || !kind) continue;
+        const perms = me ? channel.permissionsFor(me) : null;
         result.push({
           id: channel.id,
           name: channel.name,
           kind,
           category: channel.parent?.name ?? null,
-          position: channel.parent ? channel.parent.position * 1000 + channel.position : channel.position
+          position: channel.parent ? channel.parent.position * 1000 + channel.position : channel.position,
+          ...(me
+            ? {
+                bot: {
+                  read: perms?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory]) ?? false,
+                  post: perms?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages]) ?? false
+                }
+              }
+            : {})
         });
       }
       return result;

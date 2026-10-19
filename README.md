@@ -48,11 +48,11 @@ Each server can give Devin an MCP server, so that during a task Devin can read a
 | `post_to_task_thread` | Post in it, pinging nobody. Not allowed once the task is stopped |
 | `post_to_channel` | Post in a channel the server allows Devin to post in, or in a thread under it; nobody is pinged |
 | `add_reaction` | React to a message in it |
-| `list_channels` | List the channels it may read |
-| `read_channel` | Read an allowed channel or one of its threads |
+| `list_channels` | List the channels it may read and post in |
+| `read_channel` | Read a channel ticked under Read or one of its threads |
 | `get_message` | Read one message, e.g. from a link |
 
-The token decides which server a call is for. Tools only reach that server's task threads and its allowed channels, and the threads in them (every channel when none is ticked). To use `post_to_channel`, a server admin must tick channels on the MCP page; none are allowed by default. Everything read is returned inside an UNTRUSTED block, the same as mention context. The endpoint speaks Streamable HTTP with JSON responses (`POST` only; `GET` returns 405). It rejects requests whose `Origin` isn't `PUBLIC_URL`.
+The token decides which server a call is for. The MCP page picks separate Read and Post channel lists. Read defaults to the Channels tab's Allowed list (every channel when that's empty); Post defaults to none. Task threads are always readable and postable through the task-thread tools. Everything read is returned inside an UNTRUSTED block, the same as mention context. The endpoint speaks Streamable HTTP with JSON responses (`POST` only; `GET` returns 405). It rejects requests whose `Origin` isn't `PUBLIC_URL`.
 
 `PUBLIC_URL` is the MCP URL too, so on a quick tunnel you have to update it in Devin whenever the tunnel URL changes.
 
@@ -114,4 +114,3 @@ Every call uses the server's service user key against the [Devin API v3](https:/
 | Wake after sleep | [`POST …/sessions/{id}/unarchive`](https://docs.devin.ai/api-reference/v3/sessions/post-organizations-sessions-unarchive), after the reply | `ManageOrgSessions` |
 
 v3 has no sleep-only call. Archive is documented as "archive session and put it to sleep if currently running", and a message to a sleeping archived session resumes it, so Sleep archives the session and the next reply unarchives it. A stopped session can't be resumed. Sessions created for a mapped Devin user aren't created by the service user, so stopping them also needs `ManageOrgSessions`.
-

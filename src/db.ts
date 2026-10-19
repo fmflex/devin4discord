@@ -110,6 +110,13 @@ export const MIGRATIONS: string[] = [
      guild_id text not null references guilds (guild_id) on delete cascade,
      channel_id text not null,
      primary key (guild_id, channel_id)
+   );`,
+
+  // 6: channels the MCP token may read; empty = follow the Channels tab.
+  `create table guild_mcp_read_channels (
+     guild_id text not null references guilds (guild_id) on delete cascade,
+     channel_id text not null,
+     primary key (guild_id, channel_id)
    );`
 ];
 

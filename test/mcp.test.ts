@@ -54,7 +54,7 @@ function setup() {
     roles: async () => [],
     channels: async () => [
       { id: GENERAL, name: 'general', kind: 'text', category: null, position: 0 },
-      { id: SECRET_CH, name: 'staff', kind: 'text', category: null, position: 1 }
+      { id: SECRET_CH, name: 'staff', kind: 'text', category: null, position: 1, bot: { read: false, post: false } }
     ]
   };
   guilds.ensure(G, 'Test');
@@ -150,7 +150,7 @@ test('MCP channel posting is opt-in for channels and their threads', async () =>
   assert.equal(denied.isError, true);
   assert.equal(t.sent.length, 0);
 
-  t.guilds.setMcpPostChannels(G, [GENERAL]);
+  t.guilds.setMcpChannels(G, [], [GENERAL]);
   const general = await t.tool('post_to_channel', { channel_id: GENERAL, content: 'hello' });
   assert.ok(!general.isError);
   assert.deepEqual(t.sent.map((message) => message.channelId), [GENERAL]);
@@ -197,6 +197,31 @@ test('MCP channel reads follow the allowed channels and mark content untrusted',
   assert.match(list, /#general/);
   assert.doesNotMatch(list, /#staff/);
   assert.deepEqual(t.reads, [GENERAL, SUB_THREAD, THREAD]);
+});
+
+test('MCP read channels override the Channels tab allowlist and fall back when empty', async () => {
+  const t = setup();
+  t.guilds.setChannels(G, [GENERAL], null);
+  t.guilds.setMcpChannels(G, [SECRET_CH], [SECRET_CH]);
+
+  assert.ok(!(await t.tool('read_channel', { channel_id: SECRET_CH })).isError);
+  const general = await t.tool('read_channel', { channel_id: GENERAL });
+  assert.equal(general.isError, true);
+  assert.equal(general.content[0].text, "That channel isn't one of the channels this server lets Devin read through MCP.");
+  assert.equal((await t.tool('read_channel', { channel_id: SUB_THREAD })).isError, true);
+  assert.ok(!(await t.tool('read_channel', { channel_id: THREAD })).isError, 'task threads are always readable');
+  assert.equal((await t.tool('get_message', { channel_id: GENERAL, message_id: MSG })).isError, true);
+
+  const list = (await t.tool('list_channels', {})).content[0].text;
+  assert.match(list, /You may read the channels picked on the MCP page/);
+  assert.match(list, /#staff/);
+  assert.match(list, /#staff \(text\): 400000000000000002 \(bot lacks Discord access\)/);
+  assert.match(list, /You may post in:\n- #staff: 400000000000000002 \(bot lacks Discord access\)/);
+  const readListing = list.split('\n\nPosting:')[0];
+  assert.doesNotMatch(readListing, /#general/);
+
+  t.guilds.setMcpChannels(G, [], []);
+  assert.ok(!(await t.tool('read_channel', { channel_id: GENERAL })).isError, 'empty MCP list follows the Channels tab');
 });
 
 test('the other server\'s token sees only its own tasks', async () => {

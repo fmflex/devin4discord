@@ -37,11 +37,11 @@ export function devFixtures(guildId: string) {
     { id: '300000000000000005', name: 'Devin', color: 0, position: 6, managed: true }
   ];
   const channels: ChannelInfo[] = [
-    { id: '400000000000000001', name: 'announcements', kind: 'announcement', category: 'Info', position: 0 },
+    { id: '400000000000000001', name: 'announcements', kind: 'announcement', category: 'Info', position: 0, bot: { read: false, post: false } },
     { id: '400000000000000002', name: 'general', kind: 'text', category: 'Community', position: 1000 },
     { id: '400000000000000003', name: 'bug-reports', kind: 'forum', category: 'Community', position: 1001 },
     { id: '400000000000000004', name: 'dev-help', kind: 'text', category: 'Development', position: 2000 },
-    { id: '400000000000000005', name: 'devin-tasks', kind: 'text', category: 'Development', position: 2001 }
+    { id: '400000000000000005', name: 'devin-tasks', kind: 'text', category: 'Development', position: 2001, bot: { read: true, post: false } }
   ];
   const directory: Directory = {
     hasGuild: (id) => id === guildId,

@@ -325,8 +325,8 @@ const MCP_TOOLS: [string, string][] = [
   ['post_to_task_thread', 'post in it, without pinging anyone'],
   ['post_to_channel', 'post in the channels ticked below, without pinging anyone'],
   ['add_reaction', 'react to messages in it'],
-  ['list_channels', 'list the channels it may read'],
-  ['read_channel', 'read an allowed channel or its threads'],
+  ['list_channels', 'list the channels it may read and post in'],
+  ['read_channel', 'read a channel ticked under Read (or its threads)'],
   ['get_message', 'read one message, e.g. from a link']
 ];
 
@@ -334,19 +334,29 @@ export function mcpPage(
   session: WebSession,
   guild: { id: string; name: string },
   url: string,
-  channels: ChannelInfo[],
-  postable: string[],
+  settings: { channels: ChannelInfo[]; read: string[]; post: string[]; allowed: string[] },
   token: { hint: string; createdAt: number } | null,
   newToken: string | null,
   notice: PageOptions['notice']
 ) {
   const created = token ? new Date(token.createdAt).toISOString().slice(0, 10) : '';
-  const postableSet = new Set(postable);
+  const readSet = new Set(settings.read);
+  const postSet = new Set(settings.post);
+  const allowedSet = new Set(settings.allowed);
   const groups = new Map<string, ChannelInfo[]>();
-  for (const channel of [...channels].sort((a, b) => a.position - b.position)) {
+  for (const channel of [...settings.channels].sort((a, b) => a.position - b.position)) {
     const key = channel.category ?? 'No category';
     groups.set(key, [...(groups.get(key) ?? []), channel]);
   }
+  const inheritedChannels = settings.channels
+    .filter((channel) => allowedSet.has(channel.id))
+    .map((channel) => `#${channel.name}`);
+  const readSummary = settings.read.length
+    ? 'Reading: only the ticked channels.'
+    : `Reading: none ticked, so it follows the Channels tab: ${settings.allowed.length ? inheritedChannels.join(', ') : 'every channel'}.`;
+  const hasBotPermissionLimits = settings.channels.some(
+    (channel) => channel.bot?.read === false || channel.bot?.post === false
+  );
   return layout({
     title: `${guild.name} · MCP`,
     session,
@@ -354,14 +364,14 @@ export function mcpPage(
     notice,
     body: html`<section class="card">
       <h2>Devin MCP server</h2>
-      <p class="muted">Lets Devin use Discord during a task: read its task thread, post and react there, and read this server's allowed channels. Everything it reads is marked untrusted. It can't reach other servers or channels that aren't allowed.</p>
+      <p class="muted">Lets Devin use Discord during a task: read its task thread, post and react there, and read and post in the channels you pick below. Everything it reads is marked untrusted. It can't reach other servers or channels that aren't allowed.</p>
       ${newToken
         ? html`<div class="notice ok"><strong>Your new token</strong>. Copy it now; it isn't shown again.<br><code class="token">${newToken}</code></div>`
         : ''}
       <label>Server URL ${help('the server URL', html`<p>Paste this as the URL of a custom MCP server in Devin, with transport <strong>HTTP</strong>.</p><p>It comes from <code>PUBLIC_URL</code>. On a Cloudflare quick tunnel it changes whenever the tunnel restarts, so update it in Devin when that happens.</p>`)}
         <input readonly value="${url}" spellcheck="false">
       </label>
-      <label>Token ${help('the token', html`<p>A bearer token that identifies this server. Anyone with it can read the allowed channels and post in task threads, so keep it in Devin only.</p><p>Generating a new one stops the old one at once.</p>`)}</label>
+      <label>Token ${help('the token', html`<p>A bearer token that identifies this server. Anyone with it can read the selected MCP channels (or the Channels tab's Allowed list when none are ticked) and post in selected MCP channels, so keep it in Devin only.</p><p>Generating a new one stops the old one at once.</p>`)}</label>
       <p class="muted small">${token ? html`Token is <strong>set, ends in …${token.hint}</strong>, created ${created}.` : 'No token yet. Generate one to turn the MCP server on.'}</p>
       <form method="post" action="/g/${guild.id}/mcp/token">${csrfField(session)}<button class="button">${token ? 'Generate a new token' : 'Generate token'}</button></form>
       <h3>Add it to Devin</h3>
@@ -375,23 +385,34 @@ export function mcpPage(
       <h3>Tools</h3>
       <ul class="steps">${MCP_TOOLS.map(([name, text]) => html`<li><code>${name}</code>: ${text}</li>`)}</ul>
       <p class="muted small">The task-thread tools take the Devin session ID, so a session can only use the thread of a task started from this server. Stopped tasks can't post.</p>
-      <h3>Channels Devin may post in ${help('MCP posting channels', html`<p><code>post_to_channel</code> only posts in the ticked channels and threads under them.</p><p>Nobody is pinged. With none ticked, Devin can only post in its own task threads.</p><p>Anyone with the token can post there, so only tick channels where that's OK.</p>`)}</h3>
+      <h3>Channels</h3>
       <form method="post" action="/g/${guild.id}/mcp/channels">
         ${csrfField(session)}
         <table class="grid">
-          <thead><tr><th>Channel</th><th>Allow posting</th></tr></thead>
+          <thead><tr>
+            <th>Channel</th>
+            <th>Read ${help('MCP read channels', html`<p>Channels Devin may read through MCP (<code>list_channels</code>, <code>read_channel</code>, <code>get_message</code>), and the threads inside them. Its own task threads are always readable.</p><p>With none ticked, it follows the Allowed list on the Channels tab (every channel when that's empty too).</p><p>The bot's own Discord permissions come first: where its role can't see the channel (or send messages, for Post), nothing gets through, ticked or not.</p><p>${doc('https://support.discord.com/hc/en-us/articles/206141927-How-is-the-permission-hierarchy-structured', 'Discord permission hierarchy')}</p>`)}</th>
+            <th>Post ${help('MCP posting channels', html`<p><code>post_to_channel</code> only posts in the ticked channels and threads under them.</p><p>Nobody is pinged. With none ticked, Devin can only post in its own task threads.</p><p>Anyone with the token can post there, so only tick channels where that's OK.</p><p>The bot's own Discord permissions come first: where its role can't see the channel (or send messages, for Post), nothing gets through, ticked or not.</p><p>${doc('https://support.discord.com/hc/en-us/articles/206141927-How-is-the-permission-hierarchy-structured', 'Discord permission hierarchy')}</p>`, true)}</th>
+          </tr></thead>
           <tbody>
             ${[...groups].map(
-              ([category, list]) => html`<tr class="group"><td colspan="2">${category}</td></tr>
+              ([category, list]) => html`<tr class="group"><td colspan="3">${category}</td></tr>
                 ${list.map(
-                  (channel) => html`<tr>
+                  (channel) => html`<tr class="${channel.bot?.read === false || channel.bot?.post === false ? 'noaccess' : ''}">
                     <td>${channel.kind === 'text' ? html`<span class="muted">#</span> ` : ''}${channel.name}${channel.kind === 'text' ? '' : html` <span class="muted small">${KIND_LABEL[channel.kind]}</span>`}</td>
-                    <td class="center"><input type="checkbox" name="post" value="${channel.id}" aria-label="Allow MCP posting in ${channel.name}" ${postableSet.has(channel.id) ? 'checked' : ''}></td>
+                    <td class="center"><input type="checkbox" name="read" value="${channel.id}" aria-label="Allow MCP reading in ${channel.name}" ${readSet.has(channel.id) ? 'checked' : ''}>${channel.bot?.read === false ? html`<br><span class="muted small">bot can't read here</span>` : ''}</td>
+                    <td class="center">${channel.kind === 'forum'
+                      ? html`<span class="muted small">n/a</span>`
+                      : html`<input type="checkbox" name="post" value="${channel.id}" aria-label="Allow MCP posting in ${channel.name}" ${postSet.has(channel.id) ? 'checked' : ''}>${channel.bot?.post === false ? html`<br><span class="muted small">bot can't post here</span>` : ''}`}</td>
                   </tr>`
                 )}`
             )}
           </tbody>
         </table>
+        <p class="muted small">${readSummary}</p>
+        ${hasBotPermissionLimits
+          ? html`<p class="muted small">Channels marked "bot can't…" need the bot's role to get View Channel and Read Message History (Read) or Send Messages (Post) in Discord.</p>`
+          : ''}
         <button class="button">Save channels</button>
       </form>
     </section>
@@ -477,6 +498,7 @@ button.link{background:none;border:0;color:var(--muted);cursor:pointer;font:inhe
 table.grid{width:100%;border-collapse:collapse;margin-top:8px}.grid th,.grid td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
 .grid th{font-size:12px;text-transform:uppercase;color:var(--muted);font-weight:600}.grid .center{text-align:center}
 .grid tr.group td{font-size:12px;text-transform:uppercase;color:var(--muted);padding-top:16px}
+tr.noaccess td:first-child { opacity: .55 }
 .help{display:inline-block;position:relative;margin-left:4px;vertical-align:middle;font-size:13px;font-weight:400;text-transform:none;letter-spacing:normal}
 .help summary{list-style:none;cursor:pointer;width:17px;height:17px;border-radius:50%;background:#4e5058;color:#fff;font-size:11px;font-weight:700;line-height:17px;text-align:center;user-select:none}
 .help summary::-webkit-details-marker{display:none}.help summary:hover,.help[open] summary{background:var(--accent)}

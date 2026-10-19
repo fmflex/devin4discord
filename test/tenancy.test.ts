@@ -9,6 +9,7 @@ import type { DevinApi, StartTaskInput } from '../src/devin.ts';
 import { GuildStore } from '../src/guilds.ts';
 import {
   NO_LIMITS,
+  ADMIN_ROLE,
   canConfigure,
   hasPermission,
   startLimits,
@@ -64,6 +65,30 @@ test('start limits take the most generous role, and admins have none', () => {
   assert.deepEqual(startLimits(member({ roleIds: [G, HELPER] }), rules), { maxAcu: 5, tasksPerDay: 2, concurrentTasks: 1 });
   assert.deepEqual(startLimits(member({ roleIds: [G, HELPER, MOD] }), rules), { maxAcu: 20, tasksPerDay: null, concurrentTasks: 3 });
   assert.deepEqual(startLimits(member({ isAdmin: true, roleIds: [G, HELPER] }), rules), NO_LIMITS);
+});
+
+test('the Administrator row restricts admins but never removes settings', () => {
+  const admin = member({ isAdmin: true });
+  const restricted: RoleRule[] = [
+    ...rules,
+    { roleId: ADMIN_ROLE, permissions: ['reply', 'settings'], limits: NO_LIMITS }
+  ];
+  assert.equal(hasPermission(admin, restricted, 'start_tasks'), false);
+  assert.equal(hasPermission(admin, restricted, 'reply'), true);
+  assert.equal(hasPermission(admin, restricted, 'manage_tasks'), false);
+  assert.equal(canConfigure(admin, [{ roleId: ADMIN_ROLE, permissions: [], limits: NO_LIMITS }]), true);
+  // Real roles still grant what the Administrator row leaves out.
+  assert.equal(hasPermission(member({ isAdmin: true, roleIds: [G, HELPER] }), restricted, 'start_tasks'), true);
+  // Only the Discord permission confers the Administrator row.
+  assert.equal(hasPermission(member({ roleIds: [G, ADMIN_ROLE] }), [{ roleId: ADMIN_ROLE, permissions: ['start_tasks'], limits: NO_LIMITS }], 'start_tasks'), false);
+
+  const capped: RoleRule[] = [
+    ...rules,
+    { roleId: ADMIN_ROLE, permissions: ['start_tasks', 'settings'], limits: { maxAcu: 10, tasksPerDay: 3, concurrentTasks: 1 } }
+  ];
+  assert.deepEqual(startLimits(admin, capped), { maxAcu: 10, tasksPerDay: 3, concurrentTasks: 1 });
+  assert.deepEqual(startLimits(member({ isAdmin: true, roleIds: [G, HELPER] }), capped), { maxAcu: 10, tasksPerDay: 3, concurrentTasks: 1 });
+  assert.deepEqual(startLimits(member({ isAdmin: true, roleIds: [G, MOD] }), capped), { maxAcu: 20, tasksPerDay: null, concurrentTasks: 3 });
 });
 
 test('migrations keep starter tasks and are idempotent', () => {

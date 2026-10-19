@@ -6,8 +6,12 @@ import { verifyDevinCredentials } from '../devin.ts';
 import type { Directory } from '../directory.ts';
 import { DEFAULT_CONTEXT_MESSAGES, MAX_CONTEXT_MESSAGES, type Actor, type GuildStore } from '../guilds.ts';
 import {
+  ADMIN_DEFAULT,
+  ADMIN_ROLE,
   PERMISSIONS,
+  adminRule,
   canConfigure,
+  sameRule,
   type Limits,
   type MemberSnapshot,
   type Permission,
@@ -399,7 +403,17 @@ export function createWebApp(deps: WebDeps) {
     const roles = await assignableRoles(guild.id);
     const before = new Map(deps.guilds.roleRules(guild.id).map((rule) => [rule.roleId, rule]));
     const rules: RoleRule[] = [];
+    let admin = ADMIN_DEFAULT;
     try {
+      admin = {
+        roleId: ADMIN_ROLE,
+        permissions: PERMISSIONS.filter((p) => p === 'settings' || fields(form, `p_${ADMIN_ROLE}`).includes(p)),
+        limits: {
+          maxAcu: parseLimit(field(form, `acu_${ADMIN_ROLE}`), 1),
+          tasksPerDay: parseLimit(field(form, `day_${ADMIN_ROLE}`), 0),
+          concurrentTasks: parseLimit(field(form, `conc_${ADMIN_ROLE}`), 0)
+        }
+      };
       for (const role of roles) {
         const permissions = PERMISSIONS.filter((p: Permission) => fields(form, `p_${role.id}`).includes(p));
         const limits: Limits = {
@@ -418,16 +432,14 @@ export function createWebApp(deps: WebDeps) {
         const old = before.get(rule.roleId);
         const empty = !rule.permissions.length;
         if (!old && empty) return null;
-        const same =
-          old &&
-          old.permissions.join() === rule.permissions.join() &&
-          JSON.stringify(old.limits) === JSON.stringify(rule.limits);
-        if (same) return null;
+        if (old && sameRule(old, rule)) return null;
         const name = roles.find((role) => role.id === rule.roleId)?.name ?? rule.roleId;
         return describeRule(name, rule);
       })
       .filter(Boolean);
-    deps.guilds.setRoleRules(guild.id, rules);
+    if (!sameRule(adminRule([...before.values()]), admin)) changed.unshift(describeRule('Administrator', admin));
+    // The default Administrator rule isn't stored, so it keeps following ADMIN_DEFAULT.
+    deps.guilds.setRoleRules(guild.id, sameRule(admin, ADMIN_DEFAULT) ? rules : [...rules, admin]);
     if (changed.length) deps.guilds.audit(guild.id, actor, 'permissions.update', changed.join('; '));
     return c.redirect(`/g/${guild.id}/permissions?saved=1`);
   });

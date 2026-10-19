@@ -163,6 +163,33 @@ test('server pages are checked against the live member, not the OAuth list', asy
   assert.equal((await t.request(`/g/${G}/devin`)).status, 302);
 });
 
+test('the Administrator row saves restrictions, keeps settings and reverts to the default', async () => {
+  const t = setup();
+  const { session, csrf } = await signIn(t);
+  const page = await (await t.request(`/g/${G}/permissions`, { headers: { cookie: session } })).text();
+  assert.match(page, /name="p_administrator" value="start_tasks"[^>]* checked/);
+  assert.match(page, /name="p_administrator" value="settings"[^>]* checked disabled/);
+
+  const saved = await post(t, `/g/${G}/permissions`, session, { _csrf: csrf, p_administrator: 'reply', acu_administrator: '10' });
+  assert.equal(saved.status, 302);
+  assert.deepEqual(t.guilds.roleRules(G), [
+    { roleId: 'administrator', permissions: ['reply', 'settings'], limits: { maxAcu: 10, tasksPerDay: null, concurrentTasks: null } }
+  ]);
+  assert.equal(t.guilds.auditLog(G)[0].detail, 'Administrator: reply, settings (10 ACU)');
+
+  const all = new URLSearchParams([
+    ['_csrf', csrf],
+    ...['start_tasks', 'reply', 'manage_tasks'].map((p): [string, string] => ['p_administrator', p])
+  ]);
+  const reverted = await t.request(`/g/${G}/permissions`, {
+    method: 'POST',
+    headers: { cookie: session, origin: PUBLIC, 'content-type': 'application/x-www-form-urlencoded' },
+    body: all
+  });
+  assert.equal(reverted.status, 302);
+  assert.deepEqual(t.guilds.roleRules(G), []);
+});
+
 test('the Devin key is checked, stored encrypted and only shown as a hint', async () => {
   const t = setup();
   const { session, csrf } = await signIn(t);

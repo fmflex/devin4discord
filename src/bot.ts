@@ -203,7 +203,7 @@ export class Bot {
     return this.control(parsed.action, guildId, member, row);
   }
 
-  /** The opener, members with `manage_tasks` and Administrators may stop or sleep a task. */
+  /** The opener and members with `manage_tasks` (Administrators by default) may stop or sleep a task. */
   canControl(guildId: string, member: MemberSnapshot, row: TaskRow) {
     return row.openerId === member.id || hasPermission(member, this.guilds.roleRules(guildId), 'manage_tasks');
   }

@@ -229,6 +229,34 @@ test('the MCP token is shown once, stored hashed, rotated and revoked', async ()
   assert.deepEqual(t.guilds.auditLog(G).map((e) => e.action), ['mcp.remove', 'mcp.token', 'mcp.token']);
 });
 
+test('MCP posting channels are available only by an admin opt-in form', async () => {
+  const t = setup();
+  const { session, csrf } = await signIn(t);
+  const page = await (await t.request(`/g/${G}/mcp`, { headers: { cookie: session } })).text();
+  assert.match(page, /Channels Devin may post in/);
+  assert.match(page, new RegExp(`action="/g/${G}/mcp/channels"`));
+  assert.match(page, /name="post" value="400000000000000001"/);
+  assert.match(page, /About MCP posting channels/);
+
+  const path = `/g/${G}/mcp/channels`;
+  assert.equal((await post(t, path, session, { post: '400000000000000001' })).status, 403);
+  assert.deepEqual(t.guilds.mcpPostChannels(G), []);
+
+  const form = new URLSearchParams([
+    ['_csrf', csrf],
+    ['post', '400000000000000001'],
+    ['post', '400000000000000099']
+  ]);
+  const saved = await t.request(path, {
+    method: 'POST',
+    headers: { cookie: session, origin: PUBLIC, 'content-type': 'application/x-www-form-urlencoded' },
+    body: form
+  });
+  assert.equal(saved.status, 302);
+  assert.deepEqual(t.guilds.mcpPostChannels(G), ['400000000000000001']);
+  assert.equal(t.guilds.auditLog(G)[0].action, 'mcp.post_channels');
+});
+
 test('/mcp skips the cookie session and CSRF checks but needs a token', async () => {
   const t = setup();
   const res = await t.request('/mcp', { method: 'POST', body: '{}' });

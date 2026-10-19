@@ -228,6 +228,26 @@ export class GuildStore {
     });
   }
 
+  /** Channels Devin may post in through MCP; empty means none. */
+  mcpPostChannels(guildId: string): string[] {
+    return (
+      this.db
+        .prepare('select channel_id from guild_mcp_post_channels where guild_id = ? order by channel_id')
+        .all(guildId) as { channel_id: string }[]
+    ).map((row) => row.channel_id);
+  }
+
+  setMcpPostChannels(guildId: string, ids: string[]) {
+    this.ensure(guildId);
+    const insert = this.db.prepare(
+      'insert or ignore into guild_mcp_post_channels (guild_id, channel_id) values (?, ?)'
+    );
+    this.transaction(() => {
+      this.db.prepare('delete from guild_mcp_post_channels where guild_id = ?').run(guildId);
+      for (const channelId of ids) insert.run(guildId, channelId);
+    });
+  }
+
   setMentionSettings(guildId: string, contextMessages: number, mentionOnlyReplies: boolean) {
     this.ensure(guildId);
     this.db

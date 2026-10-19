@@ -323,6 +323,7 @@ export function channelsPage(
 const MCP_TOOLS: [string, string][] = [
   ['read_task_thread', "read the task's thread"],
   ['post_to_task_thread', 'post in it, without pinging anyone'],
+  ['post_to_channel', 'post in the channels ticked below, without pinging anyone'],
   ['add_reaction', 'react to messages in it'],
   ['list_channels', 'list the channels it may read'],
   ['read_channel', 'read an allowed channel or its threads'],
@@ -333,11 +334,19 @@ export function mcpPage(
   session: WebSession,
   guild: { id: string; name: string },
   url: string,
+  channels: ChannelInfo[],
+  postable: string[],
   token: { hint: string; createdAt: number } | null,
   newToken: string | null,
   notice: PageOptions['notice']
 ) {
   const created = token ? new Date(token.createdAt).toISOString().slice(0, 10) : '';
+  const postableSet = new Set(postable);
+  const groups = new Map<string, ChannelInfo[]>();
+  for (const channel of [...channels].sort((a, b) => a.position - b.position)) {
+    const key = channel.category ?? 'No category';
+    groups.set(key, [...(groups.get(key) ?? []), channel]);
+  }
   return layout({
     title: `${guild.name} · MCP`,
     session,
@@ -366,6 +375,25 @@ export function mcpPage(
       <h3>Tools</h3>
       <ul class="steps">${MCP_TOOLS.map(([name, text]) => html`<li><code>${name}</code>: ${text}</li>`)}</ul>
       <p class="muted small">The task-thread tools take the Devin session ID, so a session can only use the thread of a task started from this server. Stopped tasks can't post.</p>
+      <h3>Channels Devin may post in ${help('MCP posting channels', html`<p><code>post_to_channel</code> only posts in the ticked channels and threads under them.</p><p>Nobody is pinged. With none ticked, Devin can only post in its own task threads.</p><p>Anyone with the token can post there, so only tick channels where that's OK.</p>`)}</h3>
+      <form method="post" action="/g/${guild.id}/mcp/channels">
+        ${csrfField(session)}
+        <table class="grid">
+          <thead><tr><th>Channel</th><th>Allow posting</th></tr></thead>
+          <tbody>
+            ${[...groups].map(
+              ([category, list]) => html`<tr class="group"><td colspan="2">${category}</td></tr>
+                ${list.map(
+                  (channel) => html`<tr>
+                    <td>${channel.kind === 'text' ? html`<span class="muted">#</span> ` : ''}${channel.name}${channel.kind === 'text' ? '' : html` <span class="muted small">${KIND_LABEL[channel.kind]}</span>`}</td>
+                    <td class="center"><input type="checkbox" name="post" value="${channel.id}" aria-label="Allow MCP posting in ${channel.name}" ${postableSet.has(channel.id) ? 'checked' : ''}></td>
+                  </tr>`
+                )}`
+            )}
+          </tbody>
+        </table>
+        <button class="button">Save channels</button>
+      </form>
     </section>
     ${token
       ? html`<form class="card danger" method="post" action="/g/${guild.id}/mcp/remove">

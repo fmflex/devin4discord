@@ -103,6 +103,13 @@ export const MIGRATIONS: string[] = [
      token_hash text not null unique,
      token_hint text not null,
      created_at integer not null
+   );`,
+
+  // 5: channels the MCP token may post in outside task threads.
+  `create table guild_mcp_post_channels (
+     guild_id text not null references guilds (guild_id) on delete cascade,
+     channel_id text not null,
+     primary key (guild_id, channel_id)
    );`
 ];
 

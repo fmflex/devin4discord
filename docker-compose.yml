@@ -6,6 +6,8 @@ services:
     environment:
       # The tunnel token is only for cloudflared.
       TUNNEL_TOKEN: ""
+      # The database must live in the volume, whatever .env says.
+      DATA_DIR: /data
     volumes:
       - bridge-data:/data
 

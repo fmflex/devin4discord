@@ -190,6 +190,20 @@ test('the Administrator row saves restrictions, keeps settings and reverts to th
   assert.deepEqual(t.guilds.roleRules(G), []);
 });
 
+test('every settings page explains its settings with links to the docs', async () => {
+  const t = setup();
+  const { session } = await signIn(t);
+  const page = async (tab: string) => (await t.request(`/g/${G}/${tab}`, { headers: { cookie: session } })).text();
+  const devin = await page('devin');
+  assert.match(devin, /<details class="help"><summary aria-label="About the API key"/);
+  assert.match(devin, /href="https:\/\/docs\.devin\.ai\/api-reference\/authentication#service-users/);
+  assert.match(devin, /href="https:\/\/support\.discord\.com\/hc\/en-us\/articles\/206346498/);
+  const permissions = await page('permissions');
+  assert.match(permissions, /aria-label="About Manage tasks"/);
+  assert.match(permissions, /aria-label="About the ACU cap"/);
+  assert.match(await page('channels'), /aria-label="About allowed channels"/);
+});
+
 test('the Devin key is checked, stored encrypted and only shown as a hint', async () => {
   const t = setup();
   const { session, csrf } = await signIn(t);

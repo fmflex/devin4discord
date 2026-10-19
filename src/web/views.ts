@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto';
 import { html, raw } from 'hono/html';
 import type { ChannelInfo, RoleInfo } from '../directory.ts';
+import { DEFAULT_INSTRUCTIONS } from '../format.ts';
 import { MAX_CONTEXT_MESSAGES, type AuditEntry } from '../guilds.ts';
 
 export type MentionSettings = { contextMessages: number; mentionOnlyReplies: boolean };
@@ -24,6 +26,23 @@ function avatarUrl(session: WebSession) {
     : null;
 }
 
+const DOCS = {
+  serviceUsers: 'https://docs.devin.ai/api-reference/authentication#service-users-recommended-for-automation',
+  permissions: 'https://docs.devin.ai/api-reference/v3/overview',
+  createSession: 'https://docs.devin.ai/api-reference/v3/sessions/post-organizations-sessions',
+  billing: 'https://docs.devin.ai/admin/billing',
+  discordIds: 'https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID'
+};
+
+function doc(href: string, text: string) {
+  return html`<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+}
+
+/** A "?" that opens an explanation on click; `end` anchors it to the right for columns near the edge. */
+function help(topic: string, body: Html, end = false) {
+  return html`<details class="help${end ? ' end' : ''}"><summary aria-label="About ${topic}" title="About ${topic}">?</summary><div class="tip">${body}</div></details>`;
+}
+
 function csrfField(session: WebSession) {
   return html`<input type="hidden" name="_csrf" value="${session.csrfToken}">`;
 }
@@ -43,7 +62,7 @@ export function layout(page: PageOptions) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${page.title} · devin4discord</title>
-<link rel="stylesheet" href="/assets/app.css">
+<link rel="stylesheet" href="/assets/app.css?v=${CSS_VERSION}">
 </head>
 <body>
 <header class="top">
@@ -140,22 +159,34 @@ export function devinPage(
     body: html`<form class="card" method="post" action="/g/${guild.id}/devin">
       ${csrfField(session)}
       <h2>Devin connection</h2>
-      <p class="muted">Use a service user key (Devin → Settings → Service users) with permission to create, view and message sessions. Tasks are created by this service user.</p>
-      <label>API key
+      <p class="muted">Use a service user key (Devin → Settings → Devin API → Service users) with permission to create, view and message sessions. Tasks are created by this service user.</p>
+      <label>API key ${help('the API key', html`<p>A Devin <strong>service user</strong> key, starting with <code>cog_</code>. In Devin, open <strong>Settings → Devin API → Service users</strong>, create one and copy the key. Devin shows it only once.</p>
+        <p>Give its role <code>UseDevinSessions</code>, <code>ViewOrgSessions</code> and <code>ManageOrgSessions</code>, plus <code>ImpersonateOrgSessions</code> if you use "Run as Devin users".</p>
+        <p>It's checked with read-only calls before saving and stored encrypted.</p>
+        <p>${doc(DOCS.serviceUsers, 'Devin docs: service users')} · ${doc(DOCS.permissions, 'API permissions')}</p>`)}
         <input type="password" name="api_key" autocomplete="off" spellcheck="false"
           placeholder="${form.keyHint ? `Set, ends in …${form.keyHint}. Leave empty to keep it.` : 'cog_…'}">
       </label>
       <p class="muted small">${form.keyHint ? html`Key is <strong>set, ends in …${form.keyHint}</strong>. It is stored encrypted and never shown again.` : 'No key saved yet. It is checked with a read-only API call before saving.'}</p>
-      <label>Organization ID
+      <label>Organization ID ${help('the organization ID', html`<p>The Devin organization tasks run in. It looks like <code>org-…</code> and is shown at the top of <strong>Settings → Devin API</strong> in Devin.</p>
+        <p>The service user must be a member of this organization.</p>
+        <p>${doc(DOCS.permissions, 'Devin docs: API overview')}</p>`)}
         <input name="org_id" value="${form.orgId}" placeholder="org-…" required spellcheck="false">
       </label>
-      <label>Default repos <span class="muted">(one per line, owner/repo)</span>
+      <label>Default repos <span class="muted">(one per line, owner/repo)</span> ${help('default repos', html`<p>Repositories every task starts with, for example <code>fmflex/devin4discord</code>. They're sent as the new session's <code>repos</code>, so Devin starts in the right code.</p>
+        <p>Leave empty to send none.</p>
+        <p>${doc(DOCS.createSession, 'Devin docs: create session')}</p>`)}
         <textarea name="repos" rows="3" spellcheck="false">${form.repos}</textarea>
       </label>
-      <label>Run as Devin users <span class="muted">(optional, one per line: Discord user ID, space, Devin user ID)</span>
+      <label>Run as Devin users <span class="muted">(optional, one per line: Discord user ID, space, Devin user ID)</span> ${help('running as Devin users', html`<p>By default every task is created by the service user. List a Discord member here with their Devin user ID (<code>user-…</code>), and tasks they start and replies they send are made as that Devin user.</p>
+        <p>Example: <code>123456789012345678 user-0123abcd…</code></p>
+        <p>To copy a Discord user ID, turn on Developer Mode in Discord (User Settings → Advanced), then right-click the member → Copy User ID.</p>
+        <p>Needs <code>ImpersonateOrgSessions</code> on the service user. The Devin user must be in the organization and allowed to use Devin.</p>
+        <p>${doc(DOCS.discordIds, 'Discord: finding IDs')} · ${doc(DOCS.createSession, 'Devin docs: create_as_user_id')}</p>`)}
         <textarea name="user_map" rows="3" spellcheck="false">${form.userMap}</textarea>
       </label>
-      <label>Extra instructions <span class="muted">(added to every task; a default is used when empty)</span>
+      <label>Extra instructions <span class="muted">(added to every task; a default is used when empty)</span> ${help('extra instructions', html`<p>Added to the prompt of every task from this server, for example your conventions or "open PRs as drafts".</p>
+        <p>When empty, this default is used: <em>${DEFAULT_INSTRUCTIONS}</em></p>`)}
         <textarea name="instructions" rows="3">${form.instructions}</textarea>
       </label>
       <button class="button">Check and save</button>
@@ -171,6 +202,13 @@ export function devinPage(
   });
 }
 
+const PERMISSION_HELP: Record<(typeof PERMISSIONS)[number], Html> = {
+  start_tasks: html`<p>Start a task with <strong>@Devin</strong>, the robot reaction, <strong>Send to Devin</strong> or <code>/devin start</code>, and reply in their own task threads.</p><p>Only works in the allowed channels (see Channels).</p>`,
+  reply: html`<p>Messages they post in any task thread are forwarded to Devin.</p><p>Messages starting with <code>//</code> are never forwarded.</p>`,
+  manage_tasks: html`<p>Stop or put to sleep any task: the Stop / Sleep buttons, <code>@Devin stop</code> / <code>@Devin sleep</code> or <code>/devin stop</code> / <code>/devin sleep</code>. Also lets them reply to any task.</p><p>The member who started a task can always stop or sleep it.</p>`,
+  settings: html`<p>Use this setup site for the server. Members with Administrator or Manage Server always can.</p>`
+};
+
 function roleColor(role: RoleInfo) {
   return role.color ? `#${role.color.toString(16).padStart(6, '0')}` : '#99aab5';
 }
@@ -185,7 +223,7 @@ export function permissionsPage(
   const byRole = new Map(rules.map((rule) => [rule.roleId, rule]));
   const limit = (value: number | null | undefined) => (value == null ? '' : String(value));
   const row = (id: string, name: string, color: string, rule: RoleRule | undefined, note = '') => html`<tr>
-            <td class="role"><span class="dot" style="${raw(`background:${color}`)}"></span>${name}${note ? html` <span class="muted">${note}</span>` : ''}</td>
+            <td class="role"><span class="dot" style="${raw(`background:${color}`)}"></span>${name}${note ? html` <span class="muted">${note}</span>` : ''}${id === ADMIN_ROLE ? help('the Administrator row', html`<p>Applies to members with Discord's <strong>Administrator</strong> permission, whatever their roles.</p><p>Until you change it, they can do everything with no limits. Change settings always stays on.</p>`) : ''}</td>
             ${PERMISSIONS.map((p) => {
               const locked = id === ADMIN_ROLE && p === 'settings';
               return html`<td class="center"><input type="checkbox" name="p_${id}" value="${p}" aria-label="${name}: ${PERMISSION_LABELS[p]}" ${locked || rule?.permissions.includes(p) ? 'checked' : ''} ${locked ? 'disabled' : ''}></td>`;
@@ -204,8 +242,10 @@ export function permissionsPage(
       <h2>Role permissions</h2>
       <p class="muted">The Administrator row is for members with Discord's Administrator permission. They always keep Change settings, and so does Manage Server. Limits apply to roles that can start tasks; empty means no limit, and a member with several roles (Administrator counts as one) gets the most generous one.</p>
       <div class="scroll"><table class="grid">
-        <thead><tr><th>Role</th>${PERMISSIONS.map((p) => html`<th>${PERMISSION_LABELS[p]}</th>`)}
-          <th>ACU cap / task</th><th>Tasks / day</th><th>Concurrent</th></tr></thead>
+        <thead><tr><th>Role ${help('roles', html`<p>Roles are read live from Discord. A member gets every permission any of their roles grants.</p><p>For limits, the most generous of their roles that can start tasks applies.</p>`)}</th>${PERMISSIONS.map((p) => html`<th>${PERMISSION_LABELS[p]} ${help(PERMISSION_LABELS[p], PERMISSION_HELP[p])}</th>`)}
+          <th>ACU cap / task ${help('the ACU cap', html`<p>The most ACUs (Agent Compute Units, how Devin usage is measured) one task may use. It's sent as the session's <code>max_acu_limit</code>.</p><p>Empty means no cap.</p><p>${doc(DOCS.billing, 'Devin docs: billing and ACUs')} · ${doc(DOCS.createSession, 'create session')}</p>`, true)}</th>
+          <th>Tasks / day ${help('tasks per day', html`<p>How many tasks one member may start in any 24 hours.</p><p>Empty means no limit; 0 blocks starting.</p>`, true)}</th>
+          <th>Concurrent ${help('concurrent tasks', html`<p>How many tasks one member may have running at once. Finished and stopped tasks don't count; sleeping ones do.</p><p>Empty means no limit.</p>`, true)}</th></tr></thead>
         <tbody>
           ${row(ADMIN_ROLE, 'Administrator', '#f04747', adminRule(rules), '(Discord permission)')}
           ${roles.map((role) => row(role.id, role.name, roleColor(role), byRole.get(role.id)))}
@@ -248,7 +288,9 @@ export function channelsPage(
       <p class="muted"><strong>Allowed</strong>: where @Devin, the robot reaction, "Send to Devin" and <code>/devin start</code> work. None ticked means every channel.
         <strong>Task channel</strong>: where task threads open; by default the thread opens in the channel the request came from.</p>
       <table class="grid">
-        <thead><tr><th>Channel</th><th>Allowed</th><th>Task channel</th></tr></thead>
+        <thead><tr><th>Channel</th>
+          <th>Allowed ${help('allowed channels', html`<p>Where tasks can be started. Threads inside an allowed channel count too.</p><p>With none ticked, every channel the bot can see is allowed.</p>`)}</th>
+          <th>Task channel ${help('the task channel', html`<p>Where the task's thread is opened. With "Channel the request came from", the thread opens next to the request (on the message itself for @Devin).</p><p>Pick a channel to keep all task threads in one place.</p>`, true)}</th></tr></thead>
         <tbody>
           <tr><td class="muted">Channel the request came from</td><td></td>
             <td class="center"><input type="radio" name="task_channel" value="" aria-label="Source channel" ${taskChannelId ? '' : 'checked'}></td></tr>
@@ -265,7 +307,7 @@ export function channelsPage(
         </tbody>
       </table>
       <h3>Mentions and replies</h3>
-      <label>Channel messages sent as context with an @Devin mention
+      <label>Channel messages sent as context with an @Devin mention ${help('context messages', html`<p>How many earlier messages from the channel (0–${MAX_CONTEXT_MESSAGES}) are sent with an @Devin mention, so Devin knows what's being discussed.</p><p>They're marked as untrusted, so Devin uses them as background and never follows instructions in them. 0 sends none.</p>`)}
         <input class="narrow" type="number" name="context_messages" min="0" max="${MAX_CONTEXT_MESSAGES}" value="${mention.contextMessages}">
       </label>
       <p class="muted small">Devin gets them, and the message being replied to, marked as untrusted context it must not take instructions from.</p>
@@ -347,5 +389,13 @@ button.link{background:none;border:0;color:var(--muted);cursor:pointer;font:inhe
 table.grid{width:100%;border-collapse:collapse;margin-top:8px}.grid th,.grid td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
 .grid th{font-size:12px;text-transform:uppercase;color:var(--muted);font-weight:600}.grid .center{text-align:center}
 .grid tr.group td{font-size:12px;text-transform:uppercase;color:var(--muted);padding-top:16px}
+.help{display:inline-block;position:relative;margin-left:4px;vertical-align:middle;font-size:13px;font-weight:400;text-transform:none;letter-spacing:normal}
+.help summary{list-style:none;cursor:pointer;width:17px;height:17px;border-radius:50%;background:#4e5058;color:#fff;font-size:11px;font-weight:700;line-height:17px;text-align:center;user-select:none}
+.help summary::-webkit-details-marker{display:none}.help summary:hover,.help[open] summary{background:var(--accent)}
+.help .tip{position:absolute;z-index:10;top:24px;left:-10px;width:320px;max-width:80vw;padding:10px 14px;background:#111214;border:1px solid var(--line);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.5);color:var(--text);line-height:1.45;white-space:normal;text-align:left}
+.help.end .tip{left:auto;right:-10px}.help .tip p{margin:0 0 8px}.help .tip p:last-child{margin:0}
 .grid td.role{white-space:nowrap}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px}
 `;
+
+/** Changes whenever the CSS does, so browsers don't keep a cached copy after an update. */
+export const CSS_VERSION = createHash('sha256').update(CSS).digest('hex').slice(0, 10);

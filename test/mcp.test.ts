@@ -106,7 +106,7 @@ test('MCP speaks Streamable HTTP: initialize, tools/list, notifications, GET', a
   const list = await t.rpc('tools/list');
   assert.deepEqual(
     list.body.result.tools.map((tool: { name: string }) => tool.name),
-    ['read_task_thread', 'post_to_task_thread', 'add_reaction', 'list_channels', 'read_channel', 'get_message']
+    ['read_task_thread', 'post_to_task_thread', 'post_to_channel', 'add_reaction', 'list_channels', 'read_channel', 'get_message']
   );
   const note = await t.handle(new Request(`${PUBLIC}/mcp`, {
     method: 'POST',
@@ -139,6 +139,40 @@ test('MCP task-thread tools only reach this server\'s own, unstopped tasks', asy
   const stopped = await t.tool('post_to_task_thread', { session_id: 'devin-abc123', content: 'hi' });
   assert.equal(stopped.isError, true);
   assert.equal(t.sent.length, 2);
+});
+
+test('MCP channel posting is opt-in for channels and their threads', async () => {
+  const t = setup();
+  const before = (await t.tool('list_channels', {})).content[0].text;
+  assert.match(before, /Posting: no channels/);
+
+  const denied = await t.tool('post_to_channel', { channel_id: GENERAL, content: 'hello' });
+  assert.equal(denied.isError, true);
+  assert.equal(t.sent.length, 0);
+
+  t.guilds.setMcpPostChannels(G, [GENERAL]);
+  const general = await t.tool('post_to_channel', { channel_id: GENERAL, content: 'hello' });
+  assert.ok(!general.isError);
+  assert.deepEqual(t.sent.map((message) => message.channelId), [GENERAL]);
+
+  const thread = await t.tool('post_to_channel', { channel_id: SUB_THREAD, content: 'thread reply' });
+  assert.ok(!thread.isError);
+  assert.deepEqual(t.sent.map((message) => message.channelId), [GENERAL, SUB_THREAD]);
+
+  const secret = await t.tool('post_to_channel', { channel_id: SECRET_CH, content: 'no' });
+  assert.equal(secret.isError, true);
+  const otherGuild = await t.tool('post_to_channel', { channel_id: OTHER_THREAD, content: 'no' });
+  assert.equal(otherGuild.isError, true);
+  assert.equal(otherGuild.content[0].text, 'Channel not found in this server.');
+  assert.equal((await t.tool('post_to_channel', { channel_id: 'general', content: 'no' })).isError, true);
+
+  const long = await t.tool('post_to_channel', { channel_id: GENERAL, content: 'x'.repeat(2500) });
+  assert.ok(!long.isError);
+  assert.equal(t.sent.length, 4);
+  assert.deepEqual(t.sent.slice(2).map((message) => message.channelId), [GENERAL, GENERAL]);
+
+  const after = (await t.tool('list_channels', {})).content[0].text;
+  assert.match(after, /You may post in:\n- #general/);
 });
 
 test('MCP channel reads follow the allowed channels and mark content untrusted', async () => {

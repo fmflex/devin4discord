@@ -501,19 +501,66 @@ export function createWebApp(deps: WebDeps) {
 
   const mcpUrl = `${deps.publicUrl}/mcp`;
 
-  app.get('/g/:guildId/mcp', (c) => {
+  app.get('/g/:guildId/mcp', async (c) => {
     const { session, guild } = ctx(c);
-    return c.html(mcpPage(session, guild, mcpUrl, deps.guilds.mcpToken(guild.id), null, noticeFrom(c)));
+    const channels = (await deps.directory.channels(guild.id)).filter(
+      (channel) => channel.kind === 'text' || channel.kind === 'announcement'
+    );
+    return c.html(
+      mcpPage(
+        session,
+        guild,
+        mcpUrl,
+        channels,
+        deps.guilds.mcpPostChannels(guild.id),
+        deps.guilds.mcpToken(guild.id),
+        null,
+        noticeFrom(c)
+      )
+    );
   });
 
-  app.post('/g/:guildId/mcp/token', (c) => {
+  app.post('/g/:guildId/mcp/token', async (c) => {
     const { session, guild, actor } = ctx(c);
     const rotated = Boolean(deps.guilds.mcpToken(guild.id));
     const { token, hash, hint } = newMcpToken();
     deps.guilds.setMcpToken(guild.id, hash, hint);
     deps.guilds.audit(guild.id, actor, 'mcp.token', `${rotated ? 'rotated' : 'created'}, ends in …${hint}`);
     c.header('Cache-Control', 'no-store');
-    return c.html(mcpPage(session, guild, mcpUrl, deps.guilds.mcpToken(guild.id), token, null));
+    const channels = (await deps.directory.channels(guild.id)).filter(
+      (channel) => channel.kind === 'text' || channel.kind === 'announcement'
+    );
+    return c.html(
+      mcpPage(
+        session,
+        guild,
+        mcpUrl,
+        channels,
+        deps.guilds.mcpPostChannels(guild.id),
+        deps.guilds.mcpToken(guild.id),
+        token,
+        null
+      )
+    );
+  });
+
+  app.post('/g/:guildId/mcp/channels', async (c) => {
+    const { guild, actor } = ctx(c);
+    const form = (await c.req.parseBody({ all: true })) as Form;
+    const channels = (await deps.directory.channels(guild.id)).filter(
+      (channel) => channel.kind === 'text' || channel.kind === 'announcement'
+    );
+    const names = new Map(channels.map((channel) => [channel.id, channel.name]));
+    const postable = fields(form, 'post').filter((id) => names.has(id));
+    deps.guilds.setMcpPostChannels(guild.id, postable);
+    const label = (id: string) => `#${names.get(id)}`;
+    deps.guilds.audit(
+      guild.id,
+      actor,
+      'mcp.post_channels',
+      `allowed: ${postable.map(label).join(', ') || 'none'}`
+    );
+    return c.redirect(`/g/${guild.id}/mcp?saved=1`);
   });
 
   app.post('/g/:guildId/mcp/remove', (c) => {

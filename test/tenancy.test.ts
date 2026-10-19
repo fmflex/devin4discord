@@ -17,6 +17,7 @@ import {
 } from '../src/permissions.ts';
 import { TaskStore } from '../src/store.ts';
 import { devinResolver } from '../src/tenants.ts';
+import { controlId } from '../src/triggers.ts';
 
 const KEY = 'a-master-key-that-is-long-enough-123456';
 
@@ -119,6 +120,9 @@ function botSetup() {
   const tasks = new TaskStore(db);
   const started: StartTaskInput[] = [];
   const forwarded: string[] = [];
+  const controls: string[] = [];
+  const sent: { channelId: string; content: string }[] = [];
+  const threadsOnMessage: { channelId: string; messageId: string; title: string }[] = [];
   let next = 1;
   const devin: DevinApi = {
     async startTask(input) {
@@ -131,6 +135,15 @@ function botSetup() {
     },
     async getUpdate() {
       throw new Error('not used');
+    },
+    async terminate(taskId) {
+      controls.push(`terminate ${taskId}`);
+    },
+    async sleep(taskId) {
+      controls.push(`sleep ${taskId}`);
+    },
+    async unarchive(taskId) {
+      controls.push(`unarchive ${taskId}`);
     }
   };
   let threads = 0;
@@ -138,8 +151,14 @@ function botSetup() {
     async createTaskThread() {
       return `thread-${++threads}`;
     },
+    async createThreadOnMessage(channelId, messageId, title) {
+      threadsOnMessage.push({ channelId, messageId, title });
+      return `thread-on-${messageId}`;
+    },
     async addThreadMember() {},
-    async send() {}
+    async send(channelId, content) {
+      sent.push({ channelId, content });
+    }
   };
   const bridge = new Bridge({
     devin: (guildId) => (guilds.isConfigured(guildId) ? devin : null),
@@ -154,7 +173,18 @@ function botSetup() {
     guilds.saveDevin(G, { apiKeyEncrypted: 'x', apiKeyHint: 'abcd', orgId: 'org-1', defaultRepos: [], userMap: {} });
     guilds.setRoleRules(G, rules);
   };
-  return { bot, guilds, tasks, started, forwarded, configure, advance: (ms: number) => (now += ms) };
+  return {
+    bot,
+    guilds,
+    tasks,
+    started,
+    forwarded,
+    controls,
+    sent,
+    threadsOnMessage,
+    configure,
+    advance: (ms: number) => (now += ms)
+  };
 }
 
 const channel = { id: 'c1', parentId: null };
@@ -220,4 +250,198 @@ test('thread replies need reply, manage_tasks, or being the opener', async () =>
   const other = await t.bot.reply('900000000000000099', helper, thread, 'x', []);
   assert.equal(other.ok === false && other.reason, 'not_task');
   assert.deepEqual(t.forwarded, ['more info']);
+});
+
+const BOT = '800000000000000001';
+const G2 = '900000000000000002';
+
+function incoming(
+  t: ReturnType<typeof botSetup>,
+  who: MemberSnapshot,
+  content: string,
+  overrides: { channel?: { id: string; parentId: string | null }; id?: string; isReply?: boolean } = {}
+) {
+  const limits: number[] = [];
+  const outcome = t.bot.handleMessage({
+    guildId: G,
+    member: who,
+    channel: overrides.channel ?? channel,
+    message: { ...message, id: overrides.id ?? `m-${Math.random()}`, authorId: who.id, content },
+    botUserId: BOT,
+    isReply: overrides.isReply ?? false,
+    loadContext: async (limit) => {
+      limits.push(limit);
+      return { repliedTo: null, recent: [{ ...message, authorName: 'Other', content: 'earlier' }] };
+    }
+  });
+  return { outcome, limits };
+}
+
+test('an @mention starts a task with the mention stripped and channel context', async () => {
+  const t = botSetup();
+  t.configure();
+  const helper = member({ id: '2', roleIds: [G, HELPER] });
+  const { outcome, limits } = incoming(t, helper, `<@${BOT}> fix the login page`, { id: 'm-start' });
+  const result = await outcome;
+  assert.equal(result.action, 'started');
+  assert.deepEqual(limits, [10]);
+  assert.deepEqual(t.threadsOnMessage.map((x) => x.messageId), ['m-start']);
+  assert.match(t.started[0].prompt, /\n\nfix the login page\n/);
+  assert.doesNotMatch(t.started[0].prompt, new RegExp(BOT));
+  assert.match(t.started[0].prompt, /UNTRUSTED[\s\S]*<untrusted_discord_context>[\s\S]*earlier/);
+  assert.equal(t.guilds.auditLog(G)[0].action, 'task.start');
+
+  t.guilds.setMentionSettings(G, 3, false);
+  t.tasks.update('task-1', { active: false });
+  const second = incoming(t, helper, `<@${BOT}> again`, { channel: { id: 't9', parentId: 'c1' } });
+  assert.equal((await second.outcome).action, 'started');
+  assert.deepEqual(second.limits, [3]);
+  assert.equal(t.threadsOnMessage.length, 1, 'a mention inside a thread opens a new task thread instead');
+});
+
+test('role mentions, @everyone and plain messages outside task threads are ignored', async () => {
+  const t = botSetup();
+  t.configure();
+  const admin = member({ isAdmin: true });
+  for (const content of [`<@&${BOT}> fix it`, '@everyone fix it', 'fix it']) {
+    assert.deepEqual(await incoming(t, admin, content).outcome, { action: 'ignored' });
+  }
+  const empty = await incoming(t, admin, `<@${BOT}>`).outcome;
+  assert.equal(empty.action === 'denied' && empty.reason, 'empty');
+  assert.equal(t.started.length, 0);
+});
+
+test('mentions are gated by start_tasks and the per-role limits', async () => {
+  const t = botSetup();
+  t.configure();
+  const nobody = await incoming(t, member({ id: '1' }), `<@${BOT}> do it`).outcome;
+  assert.equal(nobody.action === 'denied' && nobody.reason, 'forbidden');
+  const unconfigured = botSetup();
+  const setup = await incoming(unconfigured, member({ isAdmin: true }), `<@${BOT}> do it`).outcome;
+  assert.equal(setup.action === 'denied' && setup.reason, 'unconfigured');
+
+  const helper = member({ id: '2', roleIds: [G, HELPER] });
+  assert.equal((await incoming(t, helper, `<@${BOT}> one`).outcome).action, 'started');
+  assert.equal(t.started[0].maxAcu, 5);
+  const concurrent = incoming(t, helper, `<@${BOT}> two`);
+  const result = await concurrent.outcome;
+  assert.equal(result.action === 'denied' && result.reason, 'limit');
+  assert.deepEqual(concurrent.limits, [], 'context is not fetched for a denied start');
+  t.tasks.update('task-1', { active: false });
+  assert.equal((await incoming(t, helper, `<@${BOT}> two`).outcome).action, 'started');
+  t.tasks.update('task-2', { active: false });
+  const daily = await incoming(t, helper, `<@${BOT}> three`).outcome;
+  assert.equal(daily.action === 'denied' && daily.reason, 'limit');
+  assert.match(daily.action === 'denied' ? daily.reply : '', /2 tasks per day/);
+  t.guilds.setChannels(G, ['c2'], null);
+  const elsewhere = await incoming(t, member({ isAdmin: true }), `<@${BOT}> x`).outcome;
+  assert.equal(elsewhere.action === 'denied' && elsewhere.reason, 'channel');
+});
+
+function seedTask(t: ReturnType<typeof botSetup>, taskId: string, threadId: string, guildId = G, openerId = '7') {
+  t.tasks.insert({ taskId, guildId, threadId, sourceMessageId: null, openerId, title: 'Task', url: `https://devin.test/${taskId}` });
+}
+
+test('a mention inside a task thread is a reply, not a new task', async () => {
+  const t = botSetup();
+  t.configure();
+  seedTask(t, 'task-a', 'thread-a', G, '2');
+  const helper = member({ id: '2', roleIds: [G, HELPER] });
+  const inThread = { id: 'thread-a', parentId: 'c1' };
+  const result = await incoming(t, helper, `<@${BOT}> also check the footer`, { channel: inThread }).outcome;
+  assert.deepEqual(result, { action: 'forwarded' });
+  assert.deepEqual(t.forwarded, ['also check the footer']);
+  assert.equal(t.started.length, 0);
+  assert.deepEqual(await incoming(t, helper, 'plain reply', { channel: inThread }).outcome, { action: 'forwarded' });
+  assert.deepEqual(t.forwarded, ['also check the footer', 'plain reply']);
+});
+
+test('"Only forward messages that @mention Devin" skips plain thread messages', async () => {
+  const t = botSetup();
+  t.configure();
+  assert.equal(t.guilds.settings(G)?.mentionOnlyReplies, false);
+  t.guilds.setMentionSettings(G, 10, true);
+  seedTask(t, 'task-a', 'thread-a', G, '2');
+  const helper = member({ id: '2', roleIds: [G, HELPER] });
+  const inThread = { id: 'thread-a', parentId: 'c1' };
+  assert.deepEqual(await incoming(t, helper, 'chatter', { channel: inThread }).outcome, { action: 'ignored' });
+  assert.deepEqual(await incoming(t, helper, `<@${BOT}> real feedback`, { channel: inThread }).outcome, { action: 'forwarded' });
+  assert.deepEqual(t.forwarded, ['real feedback']);
+});
+
+test('stop and sleep: the opener, manage_tasks and Administrators only', async () => {
+  const actors = {
+    opener: member({ id: '7' }),
+    manager: member({ id: '3', roleIds: [G, MOD] }),
+    admin: member({ id: '4', isAdmin: true }),
+    other: member({ id: '5', roleIds: [G, HELPER] }),
+    manageServer: member({ id: '6', canManageGuild: true })
+  };
+  const allowed = new Set(['opener', 'manager', 'admin']);
+  for (const [name, who] of Object.entries(actors)) {
+    for (const action of ['stop', 'sleep'] as const) {
+      const t = botSetup();
+      t.configure();
+      seedTask(t, 'task-a', 'thread-a');
+      const viaSlash = await t.bot.controlThread(action, G, who, 'thread-a');
+      const viaMention = await incoming(t, who, `<@${BOT}> ${action}`, { channel: { id: 'thread-a', parentId: 'c1' } }).outcome;
+      if (allowed.has(name)) {
+        assert.equal(viaSlash.ok, true, `${name} ${action}`);
+        assert.deepEqual(t.controls, [`${action === 'stop' ? 'terminate' : 'sleep'} task-a`]);
+        const posted = action === 'stop' ? `Stopped by <@${who.id}>.` : `Put to sleep by <@${who.id}>.`;
+        assert.ok(t.sent.some((sent) => sent.channelId === 'thread-a' && sent.content.startsWith(posted)), posted);
+        assert.equal(t.guilds.auditLog(G)[0].action, `task.${action}`);
+        assert.equal(t.guilds.auditLog(G)[0].actorId, who.id);
+        // The second attempt finds the task already stopped or asleep.
+        assert.equal(viaMention.action === 'denied' && viaMention.reason, 'ended');
+        const row = t.tasks.byThread('thread-a')!;
+        if (action === 'stop') assert.equal(row.stoppedBy, who.id);
+        else assert.equal(row.sleptBy, who.id);
+      } else {
+        assert.equal(viaSlash.ok === false && viaSlash.reason, 'forbidden', `${name} ${action}`);
+        assert.match(viaSlash.reply, /^You can't do that/);
+        assert.equal(viaMention.action === 'denied' && viaMention.reason, 'forbidden');
+        assert.deepEqual(t.controls, []);
+        assert.deepEqual(t.guilds.auditLog(G), []);
+      }
+    }
+  }
+});
+
+test('Stop / Sleep buttons only act on a task of this server, in its own thread', async () => {
+  const t = botSetup();
+  t.configure();
+  seedTask(t, 'task-here', 'thread-here');
+  seedTask(t, 'task-there', 'thread-there', G2);
+  const admin = member({ id: '4', isAdmin: true });
+  const tampered = [
+    // Another server's task, pressed from this server (in its thread or ours).
+    [controlId('stop', 'task-there'), 'thread-there'],
+    [controlId('stop', 'task-there'), 'thread-here'],
+    // This server's task, pressed from a different thread.
+    [controlId('stop', 'task-here'), 'thread-other'],
+    ['devin:stop:task-missing', 'thread-here'],
+    ['devin:terminate:task-here', 'thread-here'],
+    ['garbage', 'thread-here']
+  ];
+  for (const [customId, channelId] of tampered) {
+    const outcome = await t.bot.controlButton(customId, G, admin, channelId);
+    assert.equal(outcome.ok === false && outcome.reason, 'not_task', customId);
+  }
+  assert.deepEqual(t.controls, []);
+  const other = await t.bot.controlButton(controlId('sleep', 'task-here'), G, member({ id: '5' }), 'thread-here');
+  assert.equal(other.ok === false && other.reason, 'forbidden');
+  const ok = await t.bot.controlButton(controlId('sleep', 'task-here'), G, member({ id: '7' }), 'thread-here');
+  assert.equal(ok.ok, true);
+  assert.deepEqual(t.controls, ['sleep task-here']);
+});
+
+test('a stopped task takes no more replies', async () => {
+  const t = botSetup();
+  t.configure();
+  seedTask(t, 'task-a', 'thread-a');
+  await t.bot.controlThread('stop', G, member({ id: '7' }), 'thread-a');
+  const reply = await t.bot.reply(G, member({ id: '3', roleIds: [G, MOD] }), 'thread-a', 'more', []);
+  assert.equal(reply.ok === false && reply.reason, 'ended');
+  assert.deepEqual(t.forwarded, []);
 });

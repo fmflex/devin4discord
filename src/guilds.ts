@@ -8,7 +8,14 @@ export type GuildSettings = {
   taskChannelId: string | null;
   /** Appended to every task prompt; a default is used when empty. */
   instructions: string;
+  /** Recent channel messages sent with an @mention as untrusted context. */
+  contextMessages: number;
+  /** In task threads, only forward messages that @mention the bot. */
+  mentionOnlyReplies: boolean;
 };
+
+export const DEFAULT_CONTEXT_MESSAGES = 10;
+export const MAX_CONTEXT_MESSAGES = 50;
 
 export type DevinSettings = {
   /** AES-256-GCM ciphertext from `Secrets.encrypt`, bound to the guild ID. */
@@ -65,16 +72,27 @@ export class GuildStore {
 
   settings(guildId: string): GuildSettings | null {
     const raw = this.db
-      .prepare('select guild_id, name, task_channel_id, instructions from guilds where guild_id = ?')
+      .prepare(
+        'select guild_id, name, task_channel_id, instructions, context_messages, mention_only_replies from guilds where guild_id = ?'
+      )
       .get(guildId) as
-      | { guild_id: string; name: string; task_channel_id: string | null; instructions: string }
+      | {
+          guild_id: string;
+          name: string;
+          task_channel_id: string | null;
+          instructions: string;
+          context_messages: number;
+          mention_only_replies: number;
+        }
       | undefined;
     return raw
       ? {
           guildId: raw.guild_id,
           name: raw.name,
           taskChannelId: raw.task_channel_id,
-          instructions: raw.instructions
+          instructions: raw.instructions,
+          contextMessages: raw.context_messages,
+          mentionOnlyReplies: raw.mention_only_replies === 1
         }
       : null;
   }
@@ -208,6 +226,15 @@ export class GuildStore {
         .prepare('update guilds set task_channel_id = ?, updated_at = ? where guild_id = ?')
         .run(taskChannelId, Date.now(), guildId);
     });
+  }
+
+  setMentionSettings(guildId: string, contextMessages: number, mentionOnlyReplies: boolean) {
+    this.ensure(guildId);
+    this.db
+      .prepare(
+        'update guilds set context_messages = ?, mention_only_replies = ?, updated_at = ? where guild_id = ?'
+      )
+      .run(contextMessages, mentionOnlyReplies ? 1 : 0, Date.now(), guildId);
   }
 
   audit(guildId: string, actor: Actor, action: string, detail = '') {

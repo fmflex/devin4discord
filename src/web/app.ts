@@ -4,7 +4,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import { randomToken, safeEqual, type Secrets } from '../crypto.ts';
 import { verifyDevinCredentials } from '../devin.ts';
 import type { Directory } from '../directory.ts';
-import type { Actor, GuildStore } from '../guilds.ts';
+import { DEFAULT_CONTEXT_MESSAGES, MAX_CONTEXT_MESSAGES, type Actor, type GuildStore } from '../guilds.ts';
 import {
   PERMISSIONS,
   canConfigure,
@@ -33,6 +33,7 @@ import {
   pickerPage,
   type DevinForm,
   type PageOptions,
+  type MentionSettings,
   type PickerRow
 } from './views.ts';
 
@@ -68,6 +69,14 @@ type Env = {
 const COOKIE_OPTIONS = { httpOnly: true, secure: true, sameSite: 'Lax', path: '/' } as const;
 
 type Form = Record<string, string | File | (string | File)[]>;
+
+function mentionSettings(guilds: GuildStore, guildId: string): MentionSettings {
+  const settings = guilds.settings(guildId);
+  return {
+    contextMessages: settings?.contextMessages ?? DEFAULT_CONTEXT_MESSAGES,
+    mentionOnlyReplies: settings?.mentionOnlyReplies ?? false
+  };
+}
 
 function field(form: Form, name: string): string {
   const value = form[name];
@@ -433,6 +442,7 @@ export function createWebApp(deps: WebDeps) {
         channels,
         deps.guilds.allowedChannels(guild.id),
         deps.guilds.settings(guild.id)?.taskChannelId ?? null,
+        mentionSettings(deps.guilds, guild.id),
         noticeFrom(c)
       )
     );
@@ -446,13 +456,24 @@ export function createWebApp(deps: WebDeps) {
     const allowed = fields(form, 'allowed').filter((id) => names.has(id));
     const taskChannel = field(form, 'task_channel');
     const taskChannelId = names.has(taskChannel) ? taskChannel : null;
+    const contextRaw = field(form, 'context_messages');
+    const contextMessages = contextRaw === '' ? DEFAULT_CONTEXT_MESSAGES : Number(contextRaw);
+    if (!Number.isInteger(contextMessages) || contextMessages < 0 || contextMessages > MAX_CONTEXT_MESSAGES) {
+      const text = `Context messages must be a whole number from 0 to ${MAX_CONTEXT_MESSAGES}.`;
+      return c.html(
+        channelsPage(ctx(c).session, guild, channels, allowed, taskChannelId, mentionSettings(deps.guilds, guild.id), { kind: 'error', text }),
+        400
+      );
+    }
+    const mentionOnlyReplies = field(form, 'mention_only') === 'on';
     deps.guilds.setChannels(guild.id, allowed, taskChannelId);
+    deps.guilds.setMentionSettings(guild.id, contextMessages, mentionOnlyReplies);
     const label = (id: string) => `#${names.get(id)}`;
     deps.guilds.audit(
       guild.id,
       actor,
       'channels.update',
-      `allowed: ${allowed.map(label).join(', ') || 'all'}; task channel: ${taskChannelId ? label(taskChannelId) : 'source channel'}`
+      `allowed: ${allowed.map(label).join(', ') || 'all'}; task channel: ${taskChannelId ? label(taskChannelId) : 'source channel'}; context messages: ${contextMessages}; only @mentions forwarded: ${mentionOnlyReplies ? 'yes' : 'no'}`
     );
     return c.redirect(`/g/${guild.id}/channels?saved=1`);
   });

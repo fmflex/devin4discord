@@ -1,5 +1,8 @@
 import {
+  ActionRowBuilder,
   ApplicationCommandType,
+  ButtonBuilder,
+  ButtonStyle,
   ChannelType,
   Client,
   ContextMenuCommandBuilder,
@@ -14,6 +17,7 @@ import {
   SlashCommandBuilder,
   ThreadAutoArchiveDuration,
   type Attachment as DiscordAttachment,
+  type ButtonInteraction,
   type Channel,
   type ChatInputCommandInteraction,
   type Collection,
@@ -21,12 +25,14 @@ import {
   type Message,
   type MessageContextMenuCommandInteraction
 } from 'discord.js';
-import type { Bot, ChannelRef, Outcome } from './bot.ts';
-import type { ChatPort } from './bridge.ts';
+import type { Bot, ChannelRef, MessageOutcome, Outcome } from './bot.ts';
+import type { ChatButton, ChatPort } from './bridge.ts';
+import type { ForwardedMessage, MentionContext } from './format.ts';
 import type { Attachment } from './devin.ts';
 import type { ChannelInfo, Directory } from './directory.ts';
 import type { MemberSnapshot } from './permissions.ts';
 import type { TaskStore } from './store.ts';
+import { parseControlId } from './triggers.ts';
 
 export const COMMAND = 'devin';
 export const TRIGGER_EMOJI = '🤖';
@@ -76,20 +82,45 @@ export function discordChat(client: Client): ChatPort {
       return thread.id;
     },
 
+    async createThreadOnMessage(channelId, messageId, title) {
+      const channel = await fetchChannel(channelId);
+      if (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement) {
+        throw new Error('Task threads need a text or announcement channel.');
+      }
+      const message = await channel.messages.fetch(messageId);
+      const thread = await message.startThread({
+        name: title.slice(0, 100),
+        autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek
+      });
+      return thread.id;
+    },
+
     async addThreadMember(threadId, userId) {
       const channel = await fetchChannel(threadId);
       if (channel.isThread()) await channel.members.add(userId);
     },
 
-    async send(channelId, content, pingUserId) {
+    async send(channelId, content, pingUserId, buttons) {
       const channel = await fetchChannel(channelId);
       if (!channel.isSendable()) throw new Error(`Cannot send to channel ${channelId}.`);
       await channel.send({
         content,
-        allowedMentions: pingUserId ? { parse: [], users: [pingUserId] } : { parse: [] }
+        allowedMentions: pingUserId ? { parse: [], users: [pingUserId] } : { parse: [] },
+        components: buttons?.length ? [buttonRow(buttons)] : []
       });
     }
   };
+}
+
+function buttonRow(buttons: ChatButton[]) {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    buttons.map((button) =>
+      new ButtonBuilder()
+        .setCustomId(button.customId)
+        .setLabel(button.label)
+        .setStyle(button.style === 'danger' ? ButtonStyle.Danger : ButtonStyle.Secondary)
+    )
+  );
 }
 
 /** Bot permissions requested by the "Add to Discord" link. */
@@ -122,7 +153,11 @@ export function commandDefinitions() {
     .addSubcommand((sub) =>
       sub.setName('status').setDescription("Status and PRs of this thread's task")
     )
-    .addSubcommand((sub) => sub.setName('list').setDescription('Recent tasks in this server'));
+    .addSubcommand((sub) => sub.setName('list').setDescription('Recent tasks in this server'))
+    .addSubcommand((sub) => sub.setName('stop').setDescription("Stop this thread's task for good"))
+    .addSubcommand((sub) =>
+      sub.setName('sleep').setDescription("Put this thread's task to sleep; a reply wakes it")
+    );
   const contextMenu = new ContextMenuCommandBuilder()
     .setName('Send to Devin')
     .setType(ApplicationCommandType.Message)
@@ -211,7 +246,7 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-function forwarded(message: Message<true>) {
+function forwarded(message: Message<true>): ForwardedMessage & { id: string } {
   return {
     id: message.id,
     authorName: message.member?.displayName ?? message.author.username,
@@ -220,6 +255,26 @@ function forwarded(message: Message<true>) {
     content: message.content,
     attachments: attachments(message.attachments)
   };
+}
+
+/** The replied-to message and the last `limit` channel messages before `message`. */
+async function loadContext(message: Message<true>, limit: number): Promise<MentionContext> {
+  const repliedTo = message.reference?.messageId
+    ? await message.fetchReference().then(forwarded, () => null)
+    : null;
+  if (limit <= 0) return { repliedTo, recent: [] };
+  const history = await message.channel.messages
+    .fetch({ limit: Math.min(limit, 100), before: message.id })
+    .catch(() => null);
+  const recent = [...(history?.values() ?? [])]
+    .filter((item) => item.id !== repliedTo?.id && (item.content.trim() || item.attachments.size))
+    .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+    .map(forwarded);
+  return { repliedTo, recent };
+}
+
+function mentionsUser(content: string, userId: string) {
+  return content.includes(`<@${userId}>`) || content.includes(`<@!${userId}>`);
 }
 
 /** Tasks from before servers were tracked get their guild from their thread. */
@@ -239,7 +294,7 @@ export async function backfillTaskGuilds(client: Client, tasks: TaskStore) {
 export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore) {
   const lastDm = new Map<string, number>();
   async function dmOnce(guildId: string, userId: string, text: string) {
-    const key = `${guildId}:${userId}`;
+    const key = `${guildId}:${userId}:${text}`;
     const now = Date.now();
     if ((lastDm.get(key) ?? 0) > now - DM_COOLDOWN_MS) return;
     lastDm.set(key, now);
@@ -256,6 +311,7 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore) {
 
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.inCachedGuild()) return;
+    if (interaction.isButton()) return handleButton(interaction);
     if (!interaction.isChatInputCommand() && !interaction.isMessageContextMenuCommand()) return;
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     try {
@@ -269,6 +325,27 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore) {
       await interaction.editReply(`Failed: ${errorText(error)}`).catch(() => {});
     }
   });
+
+  async function handleButton(interaction: ButtonInteraction<'cached'>) {
+    const control = parseControlId(interaction.customId);
+    if (!control) return;
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      const outcome = await bot.controlButton(
+        interaction.customId,
+        interaction.guildId,
+        memberSnapshot(interaction.member),
+        interaction.channelId
+      );
+      await interaction.editReply({ content: outcome.reply, allowedMentions: { parse: [] } });
+      if (outcome.ok && control.action === 'stop') {
+        await interaction.message.edit({ components: [] }).catch(() => {});
+      }
+    } catch (error) {
+      console.error('Button failed:', error);
+      await interaction.editReply(`Failed: ${errorText(error)}`).catch(() => {});
+    }
+  }
 
   function handleContextMenu(
     interaction: MessageContextMenuCommandInteraction<'cached'>,
@@ -299,6 +376,9 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore) {
       );
     }
     if (sub === 'status') return bot.status(interaction.guildId, member, interaction.channelId);
+    if (sub === 'stop' || sub === 'sleep') {
+      return bot.controlThread(sub, interaction.guildId, member, interaction.channelId);
+    }
     return bot.list(interaction.guildId, member);
   }
 
@@ -324,26 +404,37 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore) {
   });
 
   client.on(Events.MessageCreate, async (message) => {
-    if (message.author.bot || !message.inGuild() || !message.channel.isThread()) return;
-    if (!bot.isTaskThread(message.channelId)) return;
+    if (message.author.bot || !message.inGuild() || !client.user) return;
     if (message.content.startsWith(IGNORE_PREFIX)) return;
-    if (!message.content.trim() && message.attachments.size === 0) return;
+    const inTaskThread = bot.isTaskThread(message.channelId);
+    // Only task threads and @mentions need a member lookup.
+    if (!inTaskThread && !mentionsUser(message.content, client.user.id)) return;
     try {
       const member = message.member ?? (await message.guild.members.fetch(message.author.id));
-      const outcome = await bot.reply(
-        message.guildId,
-        memberSnapshot(member),
-        message.channelId,
-        message.content,
-        attachments(message.attachments)
-      );
-      if (outcome.ok) await message.react('📨').catch(() => {});
-      else if (outcome.reason === 'unconfigured') {
-        await dmOnce(message.guildId, message.author.id, outcome.reply);
-      }
+      const outcome = await bot.handleMessage({
+        guildId: message.guildId,
+        member: memberSnapshot(member),
+        channel: channelRef(message.channel, message.channelId),
+        message: forwarded(message),
+        botUserId: client.user.id,
+        isReply: Boolean(message.reference?.messageId),
+        loadContext: (limit) => loadContext(message, limit)
+      });
+      await deliver(message, outcome, inTaskThread);
     } catch (error) {
-      console.error('Forwarding a thread message failed:', error);
-      await message.reply(`Could not forward this: ${errorText(error)}`).catch(() => {});
+      console.error('Handling a message failed:', error);
+      await message.reply(`Could not pass this to Devin: ${errorText(error)}`).catch(() => {});
     }
   });
+
+  /** Messages can't get ephemeral replies, so denials go privately by DM. */
+  async function deliver(message: Message<true>, outcome: MessageOutcome, inTaskThread: boolean) {
+    if (outcome.action === 'forwarded') await message.react('📨').catch(() => {});
+    else if (outcome.action === 'started') await message.react('✅').catch(() => {});
+    else if (outcome.action === 'denied') {
+      // A plain thread reply from someone without access stays silent, as before.
+      const quiet = inTaskThread && outcome.reason === 'forbidden' && !mentionsUser(message.content, client.user!.id);
+      if (!quiet) await dmOnce(message.guildId, message.author.id, outcome.reply);
+    }
+  }
 }

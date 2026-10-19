@@ -25,7 +25,7 @@ Access is set per server by Discord role on the **Permissions** page:
 | Manage tasks | Stop and sleep any task, and reply to any task |
 | Change settings | Use the setup UI for this server |
 
-The member who started a task can always stop it or put it to sleep. Members with **Administrator** can do everything; **Manage Server** can change settings. Each role can also cap ACUs per task, tasks per user per day and concurrent tasks; a member with several roles gets the most generous limit. The **Channels** page limits where tasks can start and picks the channel task threads open in.
+The member who started a task can always stop it or put it to sleep. Members with **Administrator** can do everything with no limits until you change the **Administrator** row on the Permissions page; they always keep Change settings, and **Manage Server** can always change settings. Each role can also cap ACUs per task, tasks per user per day and concurrent tasks; a member with several roles gets the most generous limit. The **Channels** page limits where tasks can start and picks the channel task threads open in.
 
 Tasks are created by the server's Devin service user and tagged `discord`, `discord-guild:<id>` and `discord-user:<id>`. The prompt names the Discord member. A member runs as a Devin user only when the server maps them on the Devin page.
 

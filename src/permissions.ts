@@ -32,19 +32,40 @@ export type MemberSnapshot = {
   canManageGuild: boolean;
 };
 
-function grantingRoles(member: MemberSnapshot, rules: RoleRule[], permission: Permission) {
-  const held = new Set(member.roleIds);
-  return rules.filter((rule) => held.has(rule.roleId) && rule.permissions.includes(permission));
+/** The rule for members with Discord's Administrator permission, stored like a role. */
+export const ADMIN_ROLE = 'administrator';
+
+/** Without a stored Administrator rule, administrators hold everything with no limits. */
+export const ADMIN_DEFAULT: RoleRule = { roleId: ADMIN_ROLE, permissions: [...PERMISSIONS], limits: NO_LIMITS };
+
+export function adminRule(rules: RoleRule[]): RoleRule {
+  return rules.find((rule) => rule.roleId === ADMIN_ROLE) ?? ADMIN_DEFAULT;
 }
 
-/** Administrators hold every permission; Manage Server also grants `settings`. */
+export function sameRule(a: RoleRule, b: RoleRule) {
+  return (
+    a.permissions.join() === b.permissions.join() &&
+    a.limits.maxAcu === b.limits.maxAcu &&
+    a.limits.tasksPerDay === b.limits.tasksPerDay &&
+    a.limits.concurrentTasks === b.limits.concurrentTasks
+  );
+}
+
+/** Administrator counts as one more role, held only through the Discord permission. */
+function grantingRoles(member: MemberSnapshot, rules: RoleRule[], permission: Permission) {
+  const held = new Set(member.roleIds);
+  const roles = rules.filter((rule) => rule.roleId !== ADMIN_ROLE && held.has(rule.roleId));
+  if (member.isAdmin) roles.push(adminRule(rules));
+  return roles.filter((rule) => rule.permissions.includes(permission));
+}
+
+/** Administrator and Manage Server always grant `settings`, so nobody locks themselves out. */
 export function hasPermission(
   member: MemberSnapshot,
   rules: RoleRule[],
   permission: Permission
 ): boolean {
-  if (member.isAdmin) return true;
-  if (permission === 'settings' && member.canManageGuild) return true;
+  if (permission === 'settings' && (member.isAdmin || member.canManageGuild)) return true;
   return grantingRoles(member, rules, permission).length > 0;
 }
 
@@ -55,10 +76,9 @@ export function canConfigure(member: MemberSnapshot | null, rules: RoleRule[]): 
 
 /**
  * Task limits for a member: the most generous value across their roles that
- * grant `start_tasks`. Administrators have none.
+ * grant `start_tasks`, Administrator included.
  */
 export function startLimits(member: MemberSnapshot, rules: RoleRule[]): Limits {
-  if (member.isAdmin) return NO_LIMITS;
   const roles = grantingRoles(member, rules, 'start_tasks');
   const most = (key: keyof Limits) => {
     let best: number | null = 0;

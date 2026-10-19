@@ -3,7 +3,7 @@ import type { ChannelInfo, RoleInfo } from '../directory.ts';
 import { MAX_CONTEXT_MESSAGES, type AuditEntry } from '../guilds.ts';
 
 export type MentionSettings = { contextMessages: number; mentionOnlyReplies: boolean };
-import { PERMISSIONS, PERMISSION_LABELS, type RoleRule } from '../permissions.ts';
+import { ADMIN_ROLE, PERMISSIONS, PERMISSION_LABELS, adminRule, type RoleRule } from '../permissions.ts';
 import type { WebSession } from './sessions.ts';
 
 type Html = ReturnType<typeof html>;
@@ -184,6 +184,16 @@ export function permissionsPage(
 ) {
   const byRole = new Map(rules.map((rule) => [rule.roleId, rule]));
   const limit = (value: number | null | undefined) => (value == null ? '' : String(value));
+  const row = (id: string, name: string, color: string, rule: RoleRule | undefined, note = '') => html`<tr>
+            <td class="role"><span class="dot" style="${raw(`background:${color}`)}"></span>${name}${note ? html` <span class="muted">${note}</span>` : ''}</td>
+            ${PERMISSIONS.map((p) => {
+              const locked = id === ADMIN_ROLE && p === 'settings';
+              return html`<td class="center"><input type="checkbox" name="p_${id}" value="${p}" aria-label="${name}: ${PERMISSION_LABELS[p]}" ${locked || rule?.permissions.includes(p) ? 'checked' : ''} ${locked ? 'disabled' : ''}></td>`;
+            })}
+            <td><input class="num" type="number" min="1" step="1" name="acu_${id}" value="${limit(rule?.limits.maxAcu)}"></td>
+            <td><input class="num" type="number" min="0" step="1" name="day_${id}" value="${limit(rule?.limits.tasksPerDay)}"></td>
+            <td><input class="num" type="number" min="0" step="1" name="conc_${id}" value="${limit(rule?.limits.concurrentTasks)}"></td>
+          </tr>`;
   return layout({
     title: `${guild.name} · Permissions`,
     session,
@@ -192,22 +202,14 @@ export function permissionsPage(
     body: html`<form class="card wide" method="post" action="/g/${guild.id}/permissions">
       ${csrfField(session)}
       <h2>Role permissions</h2>
-      <p class="muted">Members with Administrator can do everything. Manage Server can change settings. Limits apply to roles that can start tasks; empty means no limit, and a member with several roles gets the most generous one.</p>
+      <p class="muted">The Administrator row is for members with Discord's Administrator permission. They always keep Change settings, and so does Manage Server. Limits apply to roles that can start tasks; empty means no limit, and a member with several roles (Administrator counts as one) gets the most generous one.</p>
       <div class="scroll"><table class="grid">
         <thead><tr><th>Role</th>${PERMISSIONS.map((p) => html`<th>${PERMISSION_LABELS[p]}</th>`)}
           <th>ACU cap / task</th><th>Tasks / day</th><th>Concurrent</th></tr></thead>
-        <tbody>${roles.map((role) => {
-          const rule = byRole.get(role.id);
-          return html`<tr>
-            <td class="role"><span class="dot" style="${raw(`background:${roleColor(role)}`)}"></span>${role.name}</td>
-            ${PERMISSIONS.map(
-              (p) => html`<td class="center"><input type="checkbox" name="p_${role.id}" value="${p}" aria-label="${role.name}: ${PERMISSION_LABELS[p]}" ${rule?.permissions.includes(p) ? 'checked' : ''}></td>`
-            )}
-            <td><input class="num" type="number" min="1" step="1" name="acu_${role.id}" value="${limit(rule?.limits.maxAcu)}"></td>
-            <td><input class="num" type="number" min="0" step="1" name="day_${role.id}" value="${limit(rule?.limits.tasksPerDay)}"></td>
-            <td><input class="num" type="number" min="0" step="1" name="conc_${role.id}" value="${limit(rule?.limits.concurrentTasks)}"></td>
-          </tr>`;
-        })}</tbody>
+        <tbody>
+          ${row(ADMIN_ROLE, 'Administrator', '#f04747', adminRule(rules), '(Discord permission)')}
+          ${roles.map((role) => row(role.id, role.name, roleColor(role), byRole.get(role.id)))}
+        </tbody>
       </table></div>
       <button class="button">Save permissions</button>
     </form>`

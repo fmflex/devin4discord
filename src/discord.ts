@@ -304,17 +304,23 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore) {
 
   client.once(Events.ClientReady, async (ready) => {
     console.log(`Logged in as ${ready.user.tag} in ${ready.guilds.cache.size} servers.`);
-    await ready.application.commands.set(commandDefinitions());
-    console.log('Registered commands globally.');
-    await backfillTaskGuilds(client, tasks);
+    try {
+      await ready.application.commands.set(commandDefinitions());
+      console.log('Registered commands globally.');
+      await backfillTaskGuilds(client, tasks);
+    } catch (error) {
+      console.error('Start-up after login failed:', errorText(error));
+    }
   });
+
+  client.on(Events.Error, (error) => console.error('Discord client error:', errorText(error)));
 
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.inCachedGuild()) return;
     if (interaction.isButton()) return handleButton(interaction);
     if (!interaction.isChatInputCommand() && !interaction.isMessageContextMenuCommand()) return;
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     try {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const member = memberSnapshot(interaction.member);
       const outcome = interaction.isMessageContextMenuCommand()
         ? await handleContextMenu(interaction, member)
@@ -329,8 +335,8 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore) {
   async function handleButton(interaction: ButtonInteraction<'cached'>) {
     const control = parseControlId(interaction.customId);
     if (!control) return;
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     try {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const outcome = await bot.controlButton(
         interaction.customId,
         interaction.guildId,

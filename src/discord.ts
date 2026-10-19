@@ -27,6 +27,7 @@ import {
 } from 'discord.js';
 import type { Bot, ChannelRef, MessageOutcome, Outcome } from './bot.ts';
 import type { ChatButton, ChatPort } from './bridge.ts';
+import type { DiscordReader, ReadMessage } from './mcp.ts';
 import type { ForwardedMessage, MentionContext } from './format.ts';
 import type { Attachment } from './devin.ts';
 import type { ChannelInfo, Directory } from './directory.ts';
@@ -443,4 +444,67 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore) {
       if (!quiet) await dmOnce(message.guildId, message.author.id, outcome.reply);
     }
   }
+}
+
+function readMessage(message: Message): ReadMessage {
+  return {
+    id: message.id,
+    authorId: message.author.id,
+    authorName: message.member?.displayName ?? message.author.displayName,
+    bot: message.author.bot,
+    content: message.content,
+    attachments: [...message.attachments.values()].map((file) => file.url),
+    createdAt: message.createdTimestamp,
+    link: message.url
+  };
+}
+
+/** Reads and posts for the MCP tools. Callers check the channel is allowed first. */
+export function discordReader(client: Client): DiscordReader {
+  async function guildChannel(channelId: string) {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    return channel && !channel.isDMBased() ? channel : null;
+  }
+  async function textChannel(channelId: string) {
+    const channel = await guildChannel(channelId);
+    if (!channel?.isTextBased()) throw new Error(`Channel ${channelId} has no messages to read.`);
+    return channel;
+  }
+  return {
+    async channel(channelId) {
+      const channel = await guildChannel(channelId);
+      if (!channel) return null;
+      return {
+        id: channel.id,
+        guildId: channel.guildId,
+        name: channel.name,
+        parentId: channel.parentId ?? null,
+        isThread: channel.isThread()
+      };
+    },
+    async messages(channelId, { limit, before }) {
+      const channel = await textChannel(channelId);
+      const list = await channel.messages.fetch({ limit, ...(before ? { before } : {}) });
+      return [...list.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp).map(readMessage);
+    },
+    async message(channelId, messageId) {
+      const channel = await textChannel(channelId);
+      try {
+        return readMessage(await channel.messages.fetch(messageId));
+      } catch (error) {
+        if (error instanceof DiscordAPIError && error.code === RESTJSONErrorCodes.UnknownMessage) return null;
+        throw error;
+      }
+    },
+    async send(channelId, content) {
+      const channel = await textChannel(channelId);
+      const sent = await channel.send({ content, allowedMentions: { parse: [] } });
+      return sent.id;
+    },
+    async react(channelId, messageId, emoji) {
+      const channel = await textChannel(channelId);
+      const message = await channel.messages.fetch(messageId);
+      await message.react(emoji);
+    }
+  };
 }

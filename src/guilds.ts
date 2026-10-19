@@ -237,6 +237,37 @@ export class GuildStore {
       .run(contextMessages, mentionOnlyReplies ? 1 : 0, Date.now(), guildId);
   }
 
+  /** The server's MCP token, without the token itself. */
+  mcpToken(guildId: string): { hint: string; createdAt: number } | null {
+    const row = this.db
+      .prepare('select token_hint, created_at from guild_mcp where guild_id = ?')
+      .get(guildId) as { token_hint: string; created_at: number } | undefined;
+    return row ? { hint: row.token_hint, createdAt: row.created_at } : null;
+  }
+
+  /** Replaces the server's MCP token; the old one stops working. */
+  setMcpToken(guildId: string, tokenHash: string, hint: string) {
+    this.ensure(guildId);
+    this.db
+      .prepare(
+        `insert into guild_mcp (guild_id, token_hash, token_hint, created_at) values (?, ?, ?, ?)
+         on conflict (guild_id) do update set token_hash = excluded.token_hash, token_hint = excluded.token_hint, created_at = excluded.created_at`
+      )
+      .run(guildId, tokenHash, hint, Date.now());
+  }
+
+  clearMcpToken(guildId: string) {
+    this.db.prepare('delete from guild_mcp where guild_id = ?').run(guildId);
+  }
+
+  /** The server an MCP token belongs to, looked up by the token's hash. */
+  guildForMcpToken(tokenHash: string): string | null {
+    const row = this.db
+      .prepare('select guild_id from guild_mcp where token_hash = ?')
+      .get(tokenHash) as { guild_id: string } | undefined;
+    return row?.guild_id ?? null;
+  }
+
   audit(guildId: string, actor: Actor, action: string, detail = '') {
     this.db
       .prepare(

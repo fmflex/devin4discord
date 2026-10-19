@@ -74,7 +74,7 @@ ${requester(opener)} ${RELAY_NOTE}`;
 export const UNTRUSTED_TAG = 'untrusted_discord_context';
 
 /** Stops quoted Discord text from closing (or faking) the untrusted block. */
-function neutralize(text: string) {
+export function neutralize(text: string) {
   return text.replace(new RegExp(`<(/?)${UNTRUSTED_TAG}`, 'gi'), '‹$1untrusted-tag');
 }
 

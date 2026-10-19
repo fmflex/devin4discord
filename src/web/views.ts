@@ -10,7 +10,7 @@ import type { WebSession } from './sessions.ts';
 
 type Html = ReturnType<typeof html>;
 
-export type GuildTab = 'devin' | 'permissions' | 'channels' | 'audit';
+export type GuildTab = 'devin' | 'permissions' | 'channels' | 'mcp' | 'audit';
 
 export type PageOptions = {
   title: string;
@@ -31,6 +31,7 @@ const DOCS = {
   permissions: 'https://docs.devin.ai/api-reference/v3/overview',
   createSession: 'https://docs.devin.ai/api-reference/v3/sessions/post-organizations-sessions',
   billing: 'https://docs.devin.ai/admin/billing',
+  mcp: 'https://docs.devin.ai/work-with-devin/mcp',
   discordIds: 'https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID'
 };
 
@@ -53,6 +54,7 @@ export function layout(page: PageOptions) {
     ['devin', 'Devin'],
     ['permissions', 'Permissions'],
     ['channels', 'Channels'],
+    ['mcp', 'MCP'],
     ['audit', 'Audit log']
   ];
   const avatar = session ? avatarUrl(session) : null;
@@ -318,6 +320,64 @@ export function channelsPage(
   });
 }
 
+const MCP_TOOLS: [string, string][] = [
+  ['read_task_thread', "read the task's thread"],
+  ['post_to_task_thread', 'post in it, without pinging anyone'],
+  ['add_reaction', 'react to messages in it'],
+  ['list_channels', 'list the channels it may read'],
+  ['read_channel', 'read an allowed channel or its threads'],
+  ['get_message', 'read one message, e.g. from a link']
+];
+
+export function mcpPage(
+  session: WebSession,
+  guild: { id: string; name: string },
+  url: string,
+  token: { hint: string; createdAt: number } | null,
+  newToken: string | null,
+  notice: PageOptions['notice']
+) {
+  const created = token ? new Date(token.createdAt).toISOString().slice(0, 10) : '';
+  return layout({
+    title: `${guild.name} · MCP`,
+    session,
+    guild: { ...guild, tab: 'mcp' },
+    notice,
+    body: html`<section class="card">
+      <h2>Devin MCP server</h2>
+      <p class="muted">Lets Devin use Discord during a task: read its task thread, post and react there, and read this server's allowed channels. Everything it reads is marked untrusted. It can't reach other servers or channels that aren't allowed.</p>
+      ${newToken
+        ? html`<div class="notice ok"><strong>Your new token</strong>. Copy it now; it isn't shown again.<br><code class="token">${newToken}</code></div>`
+        : ''}
+      <label>Server URL ${help('the server URL', html`<p>Paste this as the URL of a custom MCP server in Devin, with transport <strong>HTTP</strong>.</p><p>It comes from <code>PUBLIC_URL</code>. On a Cloudflare quick tunnel it changes whenever the tunnel restarts, so update it in Devin when that happens.</p>`)}
+        <input readonly value="${url}" spellcheck="false">
+      </label>
+      <label>Token ${help('the token', html`<p>A bearer token that identifies this server. Anyone with it can read the allowed channels and post in task threads, so keep it in Devin only.</p><p>Generating a new one stops the old one at once.</p>`)}</label>
+      <p class="muted small">${token ? html`Token is <strong>set, ends in …${token.hint}</strong>, created ${created}.` : 'No token yet. Generate one to turn the MCP server on.'}</p>
+      <form method="post" action="/g/${guild.id}/mcp/token">${csrfField(session)}<button class="button">${token ? 'Generate a new token' : 'Generate token'}</button></form>
+      <h3>Add it to Devin</h3>
+      <ol class="steps">
+        <li>In Devin, open <strong>Customize → MCPs</strong>, then <strong>Add MCP → Add custom MCP</strong>. It needs the Manage MCP Servers permission.</li>
+        <li>Transport <strong>HTTP</strong>, URL as above.</li>
+        <li>Authentication <strong>Auth Header</strong>: key <code>Authorization</code>, value <code>Bearer ${newToken ?? '<your token>'}</code>.</li>
+        <li>Save, then click <strong>Test tools</strong>.</li>
+      </ol>
+      <p class="muted small">${doc(DOCS.mcp, 'Devin docs: custom MCP servers')}</p>
+      <h3>Tools</h3>
+      <ul class="steps">${MCP_TOOLS.map(([name, text]) => html`<li><code>${name}</code>: ${text}</li>`)}</ul>
+      <p class="muted small">The task-thread tools take the Devin session ID, so a session can only use the thread of a task started from this server. Stopped tasks can't post.</p>
+    </section>
+    ${token
+      ? html`<form class="card danger" method="post" action="/g/${guild.id}/mcp/remove">
+          ${csrfField(session)}
+          <h2>Turn off</h2>
+          <p class="muted">Revokes the token. Devin's MCP calls to this server fail until a new one is generated.</p>
+          <button class="button danger">Revoke token</button>
+        </form>`
+      : ''}`
+  });
+}
+
 export function auditPage(
   session: WebSession,
   guild: { id: string; name: string },
@@ -394,7 +454,8 @@ table.grid{width:100%;border-collapse:collapse;margin-top:8px}.grid th,.grid td{
 .help summary::-webkit-details-marker{display:none}.help summary:hover,.help[open] summary{background:var(--accent)}
 .help .tip{position:absolute;z-index:10;top:24px;left:-10px;width:320px;max-width:80vw;padding:10px 14px;background:#111214;border:1px solid var(--line);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.5);color:var(--text);line-height:1.45;white-space:normal;text-align:left}
 .help.end .tip{left:auto;right:-10px}.help .tip p{margin:0 0 8px}.help .tip p:last-child{margin:0}
-.grid td.role{white-space:nowrap}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px}
+.grid td.role{white-space:nowrap}
+.steps{padding-left:20px;margin:6px 0}.steps li{margin:4px 0}code.token{display:inline-block;margin-top:6px;word-break:break-all;user-select:all}h3{font-size:15px;margin:18px 0 6px}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px}
 `;
 
 /** Changes whenever the CSS does, so browsers don't keep a cached copy after an update. */

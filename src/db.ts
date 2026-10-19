@@ -95,7 +95,15 @@ export const MIGRATIONS: string[] = [
   `alter table tasks add column stopped_by text;
    alter table tasks add column slept_by text;
    alter table guilds add column context_messages integer not null default 10;
-   alter table guilds add column mention_only_replies integer not null default 0;`
+   alter table guilds add column mention_only_replies integer not null default 0;`,
+
+  // 4: per-server MCP token (only its hash is stored).
+  `create table guild_mcp (
+     guild_id text primary key,
+     token_hash text not null unique,
+     token_hint text not null,
+     created_at integer not null
+   );`
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

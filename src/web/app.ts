@@ -3,6 +3,7 @@ import { deleteCookie, getSignedCookie, setSignedCookie } from 'hono/cookie';
 import { secureHeaders } from 'hono/secure-headers';
 import { randomToken, safeEqual, type Secrets } from '../crypto.ts';
 import { verifyDevinCredentials } from '../devin.ts';
+import { newMcpToken } from '../mcp.ts';
 import type { Directory } from '../directory.ts';
 import { DEFAULT_CONTEXT_MESSAGES, MAX_CONTEXT_MESSAGES, type Actor, type GuildStore } from '../guilds.ts';
 import {
@@ -33,6 +34,7 @@ import {
   devinPage,
   errorPage,
   landingPage,
+  mcpPage,
   permissionsPage,
   pickerPage,
   type DevinForm,
@@ -56,6 +58,8 @@ export type WebDeps = {
   directory: Directory;
   /** Used for Discord OAuth and the Devin key check. */
   fetch?: typeof fetch;
+  /** The per-server MCP endpoint served at `/mcp`; see `createMcpHandler`. */
+  mcp?: (request: Request) => Promise<Response>;
   /** Development only: `/auth/dev` signs in as this identity without Discord. */
   devLogin?: DiscordIdentity;
 };
@@ -154,6 +158,11 @@ export function createWebApp(deps: WebDeps) {
       },
       referrerPolicy: 'same-origin'
     })
+  );
+
+  // Bearer-token API for Devin; registered before the cookie session and CSRF checks, which it doesn't use.
+  app.on(['GET', 'POST', 'DELETE'], '/mcp', (c) =>
+    deps.mcp ? deps.mcp(c.req.raw) : c.json({ error: 'MCP is not available.' }, 404)
   );
 
   app.use(async (c, next) => {
@@ -488,6 +497,32 @@ export function createWebApp(deps: WebDeps) {
       `allowed: ${allowed.map(label).join(', ') || 'all'}; task channel: ${taskChannelId ? label(taskChannelId) : 'source channel'}; context messages: ${contextMessages}; only @mentions forwarded: ${mentionOnlyReplies ? 'yes' : 'no'}`
     );
     return c.redirect(`/g/${guild.id}/channels?saved=1`);
+  });
+
+  const mcpUrl = `${deps.publicUrl}/mcp`;
+
+  app.get('/g/:guildId/mcp', (c) => {
+    const { session, guild } = ctx(c);
+    return c.html(mcpPage(session, guild, mcpUrl, deps.guilds.mcpToken(guild.id), null, noticeFrom(c)));
+  });
+
+  app.post('/g/:guildId/mcp/token', (c) => {
+    const { session, guild, actor } = ctx(c);
+    const rotated = Boolean(deps.guilds.mcpToken(guild.id));
+    const { token, hash, hint } = newMcpToken();
+    deps.guilds.setMcpToken(guild.id, hash, hint);
+    deps.guilds.audit(guild.id, actor, 'mcp.token', `${rotated ? 'rotated' : 'created'}, ends in …${hint}`);
+    c.header('Cache-Control', 'no-store');
+    return c.html(mcpPage(session, guild, mcpUrl, deps.guilds.mcpToken(guild.id), token, null));
+  });
+
+  app.post('/g/:guildId/mcp/remove', (c) => {
+    const { guild, actor } = ctx(c);
+    if (deps.guilds.mcpToken(guild.id)) {
+      deps.guilds.clearMcpToken(guild.id);
+      deps.guilds.audit(guild.id, actor, 'mcp.remove', 'MCP token revoked');
+    }
+    return c.redirect(`/g/${guild.id}/mcp?saved=1`);
   });
 
   app.get('/g/:guildId/audit', (c) => {

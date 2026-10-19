@@ -11,9 +11,11 @@ import {
   createClient,
   discordChat,
   discordDirectory,
+  discordReader,
   wireDiscord
 } from './discord.ts';
 import { GuildStore } from './guilds.ts';
+import { createMcpHandler } from './mcp.ts';
 import { TaskStore } from './store.ts';
 import { devinResolver } from './tenants.ts';
 import { createWebApp } from './web/app.ts';
@@ -36,6 +38,7 @@ const bot = new Bot({ bridge, guilds, tasks, publicUrl: config.publicUrl });
 
 wireDiscord(client, bot, tasks);
 
+const directory = discordDirectory(client);
 const app = createWebApp({
   publicUrl: config.publicUrl,
   discordClientId: config.discordClientId,
@@ -45,7 +48,8 @@ const app = createWebApp({
   secrets,
   guilds,
   sessions,
-  directory: discordDirectory(client)
+  directory,
+  mcp: createMcpHandler({ publicUrl: config.publicUrl, guilds, tasks, directory, reader: discordReader(client) })
 });
 const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
   console.log(`Setup UI listening on port ${port} (${config.publicUrl}).`);

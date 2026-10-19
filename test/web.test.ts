@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Secrets } from '../src/crypto.ts';
+import { Secrets, sha256 } from '../src/crypto.ts';
 import { openDatabase } from '../src/db.ts';
 import { devFixtures, devLoginEnabled } from '../src/dev-web.ts';
 import type { Directory } from '../src/directory.ts';
@@ -202,6 +202,37 @@ test('every settings page explains its settings with links to the docs', async (
   assert.match(permissions, /aria-label="About Manage tasks"/);
   assert.match(permissions, /aria-label="About the ACU cap"/);
   assert.match(await page('channels'), /aria-label="About allowed channels"/);
+});
+
+test('the MCP token is shown once, stored hashed, rotated and revoked', async () => {
+  const t = setup();
+  const { session, csrf } = await signIn(t);
+  const empty = await (await t.request(`/g/${G}/mcp`, { headers: { cookie: session } })).text();
+  assert.match(empty, /No token yet/);
+  assert.match(empty, /value="https:\/\/devin\.example\.com\/mcp"/);
+
+  const created = await post(t, `/g/${G}/mcp/token`, session, { _csrf: csrf });
+  assert.equal(created.status, 200);
+  const token = /<code class="token">(d4d_[\w-]+)<\/code>/.exec(await created.text())?.[1];
+  assert.ok(token);
+  const stored = t.db.prepare('select token_hash from guild_mcp where guild_id = ?').get(G) as { token_hash: string };
+  assert.notEqual(stored.token_hash, token);
+  assert.equal(t.guilds.guildForMcpToken(sha256(token)), G);
+  const again = await (await t.request(`/g/${G}/mcp`, { headers: { cookie: session } })).text();
+  assert.ok(!again.includes(token));
+  assert.match(again, new RegExp(`ends in …${token.slice(-4)}`));
+
+  await post(t, `/g/${G}/mcp/token`, session, { _csrf: csrf });
+  assert.equal(t.guilds.guildForMcpToken(sha256(token)), null);
+  assert.equal((await post(t, `/g/${G}/mcp/remove`, session, { _csrf: csrf })).status, 302);
+  assert.equal(t.guilds.mcpToken(G), null);
+  assert.deepEqual(t.guilds.auditLog(G).map((e) => e.action), ['mcp.remove', 'mcp.token', 'mcp.token']);
+});
+
+test('/mcp skips the cookie session and CSRF checks but needs a token', async () => {
+  const t = setup();
+  const res = await t.request('/mcp', { method: 'POST', body: '{}' });
+  assert.equal(res.status, 404);
 });
 
 test('the Devin key is checked, stored encrypted and only shown as a hint', async () => {

@@ -31,6 +31,30 @@ Tasks are created by the server's Devin service user and tagged `discord`, `disc
 
 Until a server saves a Devin key, every trigger there gets a private reply pointing to the setup UI. Every settings change and task start is written to the server's **Audit log**.
 
+## Devin MCP server
+
+Each server can give Devin an MCP server, so that during a task Devin can read and post in Discord itself, without waiting for the bot to forward messages. Turn it on from the **MCP** page:
+
+1. Click **Generate token**. The token is shown once and only its hash is stored. Generating a new one revokes the old one.
+2. In Devin, open [**Customize → MCPs → Add MCP → Add custom MCP**](https://docs.devin.ai/work-with-devin/mcp#setting-up-a-custom-mcp-server). This needs the Manage MCP Servers permission.
+   - Transport: **HTTP**
+   - URL: `<PUBLIC_URL>/mcp`
+   - Authentication: **Auth Header**, key `Authorization`, value `Bearer <token>`
+3. Click **Test tools**.
+
+| Tool | Does |
+| --- | --- |
+| `read_task_thread` | Read the task's thread (needs the Devin session ID) |
+| `post_to_task_thread` | Post in it, pinging nobody. Not allowed once the task is stopped |
+| `add_reaction` | React to a message in it |
+| `list_channels` | List the channels it may read |
+| `read_channel` | Read an allowed channel or one of its threads |
+| `get_message` | Read one message, e.g. from a link |
+
+The token decides which server a call is for. Tools only reach that server's task threads and its allowed channels, and the threads in them (every channel when none is ticked). Everything read is returned inside an UNTRUSTED block, the same as mention context. The endpoint speaks Streamable HTTP with JSON responses (`POST` only; `GET` returns 405). It rejects requests whose `Origin` isn't `PUBLIC_URL`.
+
+`PUBLIC_URL` is the MCP URL too, so on a quick tunnel you have to update it in Devin whenever the tunnel URL changes.
+
 ## Hosting it
 
 `.env` holds only host settings; everything per server is stored in SQLite, with Devin keys encrypted (AES-256-GCM, key derived from `MASTER_KEY`).

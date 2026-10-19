@@ -219,15 +219,22 @@ export function createMcpHandler(deps: McpDeps) {
     if (!channel || channel.guildId !== guildId) throw new ToolError('Channel not found in this server.');
     const task = deps.tasks.byThread(channel.id);
     if (task && task.guildId === guildId) return channel;
-    const allowed = deps.guilds.allowedChannels(guildId);
+    const { ids: allowed } = readList(guildId);
     if (
       allowed.length &&
       !allowed.includes(channel.id) &&
       !(channel.parentId && allowed.includes(channel.parentId))
     ) {
-      throw new ToolError("That channel isn't one of this server's allowed channels.");
+      throw new ToolError("That channel isn't one of the channels this server lets Devin read through MCP.");
     }
     return channel;
+  }
+
+  function readList(guildId: string): { ids: string[]; source: 'mcp' | 'channels' } {
+    const mcp = deps.guilds.mcpReadChannels(guildId);
+    return mcp.length
+      ? { ids: mcp, source: 'mcp' }
+      : { ids: deps.guilds.allowedChannels(guildId), source: 'channels' };
   }
 
   async function post(channelId: string, args: ToolArgs) {
@@ -274,12 +281,17 @@ export function createMcpHandler(deps: McpDeps) {
         return 'Reacted.';
       }
       case 'list_channels': {
-        const allowed = deps.guilds.allowedChannels(guildId);
+        const { ids: allowed, source } = readList(guildId);
         const directoryChannels = await deps.directory.channels(guildId);
         const channels = directoryChannels
           .filter((channel) => !allowed.length || allowed.includes(channel.id))
           .sort((a, b) => a.position - b.position);
-        const scope = allowed.length ? 'the allowed channels' : 'every channel (this server allows all)';
+        const scope =
+          source === 'mcp'
+            ? 'the channels picked on the MCP page'
+            : allowed.length
+              ? 'the allowed channels'
+              : 'every channel (this server allows all)';
         const readable = channels.length
           ? `You may read ${scope}, their threads and the task threads:\n${channels
               .map((c) => `- #${neutralize(c.name)} (${c.kind}${c.category ? `, ${neutralize(c.category)}` : ''}): ${c.id}`)

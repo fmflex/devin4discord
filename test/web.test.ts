@@ -41,7 +41,10 @@ function setup(memberOf: MemberSnapshot | null = { id: USER, name: 'Dev', roleId
       { id: G, name: '@everyone', color: 0, position: 0, managed: false },
       { id: SETTINGS_ROLE, name: 'Mods', color: 0, position: 1, managed: false }
     ],
-    channels: async () => [{ id: '400000000000000001', name: 'general', kind: 'text', category: null, position: 0 }]
+    channels: async () => [
+      { id: '400000000000000001', name: 'general', kind: 'text', category: null, position: 0 },
+      { id: '400000000000000003', name: 'bug-reports', kind: 'forum', category: 'Community', position: 1 }
+    ]
   };
   const app = createWebApp({
     publicUrl: PUBLIC,
@@ -229,22 +232,38 @@ test('the MCP token is shown once, stored hashed, rotated and revoked', async ()
   assert.deepEqual(t.guilds.auditLog(G).map((e) => e.action), ['mcp.remove', 'mcp.token', 'mcp.token']);
 });
 
-test('MCP posting channels are available only by an admin opt-in form', async () => {
+test('MCP read and post channels are configured together with admin opt-in', async () => {
   const t = setup();
   const { session, csrf } = await signIn(t);
+  const allChannelFallback = await (await t.request(`/g/${G}/mcp`, { headers: { cookie: session } })).text();
+  assert.match(allChannelFallback, /Reading: none ticked, so it follows the Channels tab: every channel\./);
+  t.guilds.setChannels(G, ['400000000000000001'], null);
   const page = await (await t.request(`/g/${G}/mcp`, { headers: { cookie: session } })).text();
-  assert.match(page, /Channels Devin may post in/);
+  assert.match(page, /<h3>Channels<\/h3>/);
+  assert.match(page, /Reading: none ticked, so it follows the Channels tab: #general\./);
   assert.match(page, new RegExp(`action="/g/${G}/mcp/channels"`));
+  assert.match(page, /name="read" value="400000000000000001"/);
   assert.match(page, /name="post" value="400000000000000001"/);
+  assert.match(page, /name="read" value="400000000000000003"/);
+  assert.doesNotMatch(page, /name="post" value="400000000000000003"/);
+  assert.match(page, /<span class="muted small">n\/a<\/span>/);
+  assert.match(page, /About MCP read channels/);
   assert.match(page, /About MCP posting channels/);
+  assert.match(page, /Channels Devin may read through MCP/);
+  assert.match(page, /With none ticked, it follows the Allowed list on the Channels tab \(every channel when that's empty too\)\./);
 
   const path = `/g/${G}/mcp/channels`;
-  assert.equal((await post(t, path, session, { post: '400000000000000001' })).status, 403);
+  assert.equal((await post(t, path, session, { read: '400000000000000001', post: '400000000000000001' })).status, 403);
+  assert.deepEqual(t.guilds.mcpReadChannels(G), []);
   assert.deepEqual(t.guilds.mcpPostChannels(G), []);
 
   const form = new URLSearchParams([
     ['_csrf', csrf],
+    ['read', '400000000000000001'],
+    ['read', '400000000000000003'],
+    ['read', '400000000000000099'],
     ['post', '400000000000000001'],
+    ['post', '400000000000000003'],
     ['post', '400000000000000099']
   ]);
   const saved = await t.request(path, {
@@ -253,8 +272,10 @@ test('MCP posting channels are available only by an admin opt-in form', async ()
     body: form
   });
   assert.equal(saved.status, 302);
+  assert.deepEqual(t.guilds.mcpReadChannels(G), ['400000000000000001', '400000000000000003']);
   assert.deepEqual(t.guilds.mcpPostChannels(G), ['400000000000000001']);
-  assert.equal(t.guilds.auditLog(G)[0].action, 'mcp.post_channels');
+  assert.equal(t.guilds.auditLog(G)[0].action, 'mcp.channels');
+  assert.equal(t.guilds.auditLog(G)[0].detail, 'read: #general, #bug-reports; post: #general');
 });
 
 test('/mcp skips the cookie session and CSRF checks but needs a token', async () => {

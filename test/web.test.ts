@@ -60,7 +60,7 @@ function setup(memberOf: MemberSnapshot | null = { id: USER, name: 'Dev', roleId
     devLogin: { ...identity, guilds: [{ ...identity.guilds[0], id: G }] }
   });
   const request = (path: string, init: RequestInit = {}) => app.request(`${PUBLIC}${path}`, init);
-  return { app, db, guilds, secrets, calls, responses, state, request };
+  return { app, db, guilds, secrets, calls, responses, state, directory, request };
 }
 
 function cookie(res: Response, name: string) {
@@ -236,8 +236,14 @@ test('MCP read and post channels are configured together with admin opt-in', asy
   const t = setup();
   const { session, csrf } = await signIn(t);
   const allChannelFallback = await (await t.request(`/g/${G}/mcp`, { headers: { cookie: session } })).text();
+  assert.doesNotMatch(allChannelFallback, /Channels marked "bot can't/);
   assert.match(allChannelFallback, /Reading: none ticked, so it follows the Channels tab: every channel\./);
   t.guilds.setChannels(G, ['400000000000000001'], null);
+  t.directory.channels = async () => [
+    { id: '400000000000000001', name: 'general', kind: 'text', category: null, position: 0, bot: { read: false, post: true } },
+    { id: '400000000000000003', name: 'bug-reports', kind: 'forum', category: 'Community', position: 1 },
+    { id: '400000000000000004', name: 'dev-help', kind: 'text', category: 'Development', position: 2, bot: { read: true, post: false } }
+  ];
   const page = await (await t.request(`/g/${G}/mcp`, { headers: { cookie: session } })).text();
   assert.match(page, /<h3>Channels<\/h3>/);
   assert.match(page, /Reading: none ticked, so it follows the Channels tab: #general\./);
@@ -251,6 +257,13 @@ test('MCP read and post channels are configured together with admin opt-in', asy
   assert.match(page, /About MCP posting channels/);
   assert.match(page, /Channels Devin may read through MCP/);
   assert.match(page, /With none ticked, it follows the Allowed list on the Channels tab \(every channel when that's empty too\)\./);
+  assert.match(page, /bot can't read here/);
+  assert.match(page, /bot can't post here/);
+  assert.match(page, /class="noaccess"/);
+  assert.match(page, /Channels marked "bot can't…" need the bot's role to get View Channel and Read Message History \(Read\) or Send Messages \(Post\) in Discord\./);
+  assert.match(page, /href="https:\/\/support\.discord\.com\/hc\/en-us\/articles\/206141927-How-is-the-permission-hierarchy-structured"/);
+  assert.doesNotMatch(page, /name="read"[^>]*disabled/);
+  assert.doesNotMatch(page, /name="post"[^>]*disabled/);
 
   const path = `/g/${G}/mcp/channels`;
   assert.equal((await post(t, path, session, { read: '400000000000000001', post: '400000000000000001' })).status, 403);
@@ -276,6 +289,9 @@ test('MCP read and post channels are configured together with admin opt-in', asy
   assert.deepEqual(t.guilds.mcpPostChannels(G), ['400000000000000001']);
   assert.equal(t.guilds.auditLog(G)[0].action, 'mcp.channels');
   assert.equal(t.guilds.auditLog(G)[0].detail, 'read: #general, #bug-reports; post: #general');
+  const savedPage = await (await t.request(`/g/${G}/mcp`, { headers: { cookie: session } })).text();
+  assert.match(savedPage, /name="read" value="400000000000000001"[^>]*checked/);
+  assert.match(savedPage, /name="post" value="400000000000000001"[^>]*checked/);
 });
 
 test('/mcp skips the cookie session and CSRF checks but needs a token', async () => {

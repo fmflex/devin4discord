@@ -54,7 +54,7 @@ function setup() {
     roles: async () => [],
     channels: async () => [
       { id: GENERAL, name: 'general', kind: 'text', category: null, position: 0 },
-      { id: SECRET_CH, name: 'staff', kind: 'text', category: null, position: 1 }
+      { id: SECRET_CH, name: 'staff', kind: 'text', category: null, position: 1, bot: { read: false, post: false } }
     ]
   };
   guilds.ensure(G, 'Test');
@@ -202,7 +202,7 @@ test('MCP channel reads follow the allowed channels and mark content untrusted',
 test('MCP read channels override the Channels tab allowlist and fall back when empty', async () => {
   const t = setup();
   t.guilds.setChannels(G, [GENERAL], null);
-  t.guilds.setMcpChannels(G, [SECRET_CH], []);
+  t.guilds.setMcpChannels(G, [SECRET_CH], [SECRET_CH]);
 
   assert.ok(!(await t.tool('read_channel', { channel_id: SECRET_CH })).isError);
   const general = await t.tool('read_channel', { channel_id: GENERAL });
@@ -215,6 +215,8 @@ test('MCP read channels override the Channels tab allowlist and fall back when e
   const list = (await t.tool('list_channels', {})).content[0].text;
   assert.match(list, /You may read the channels picked on the MCP page/);
   assert.match(list, /#staff/);
+  assert.match(list, /#staff \(text\): 400000000000000002 \(bot lacks Discord access\)/);
+  assert.match(list, /You may post in:\n- #staff: 400000000000000002 \(bot lacks Discord access\)/);
   const readListing = list.split('\n\nPosting:')[0];
   assert.doesNotMatch(readListing, /#general/);
 

@@ -354,6 +354,9 @@ export function mcpPage(
   const readSummary = settings.read.length
     ? 'Reading: only the ticked channels.'
     : `Reading: none ticked, so it follows the Channels tab: ${settings.allowed.length ? inheritedChannels.join(', ') : 'every channel'}.`;
+  const hasBotPermissionLimits = settings.channels.some(
+    (channel) => channel.bot?.read === false || channel.bot?.post === false
+  );
   return layout({
     title: `${guild.name} · MCP`,
     session,
@@ -388,25 +391,28 @@ export function mcpPage(
         <table class="grid">
           <thead><tr>
             <th>Channel</th>
-            <th>Read ${help('MCP read channels', html`<p>Channels Devin may read through MCP (<code>list_channels</code>, <code>read_channel</code>, <code>get_message</code>), and the threads inside them. Its own task threads are always readable.</p><p>With none ticked, it follows the Allowed list on the Channels tab (every channel when that's empty too).</p>`)}</th>
-            <th>Post ${help('MCP posting channels', html`<p><code>post_to_channel</code> only posts in the ticked channels and threads under them.</p><p>Nobody is pinged. With none ticked, Devin can only post in its own task threads.</p><p>Anyone with the token can post there, so only tick channels where that's OK.</p>`, true)}</th>
+            <th>Read ${help('MCP read channels', html`<p>Channels Devin may read through MCP (<code>list_channels</code>, <code>read_channel</code>, <code>get_message</code>), and the threads inside them. Its own task threads are always readable.</p><p>With none ticked, it follows the Allowed list on the Channels tab (every channel when that's empty too).</p><p>The bot's own Discord permissions come first: where its role can't see the channel (or send messages, for Post), nothing gets through, ticked or not.</p><p>${doc('https://support.discord.com/hc/en-us/articles/206141927-How-is-the-permission-hierarchy-structured', 'Discord permission hierarchy')}</p>`)}</th>
+            <th>Post ${help('MCP posting channels', html`<p><code>post_to_channel</code> only posts in the ticked channels and threads under them.</p><p>Nobody is pinged. With none ticked, Devin can only post in its own task threads.</p><p>Anyone with the token can post there, so only tick channels where that's OK.</p><p>The bot's own Discord permissions come first: where its role can't see the channel (or send messages, for Post), nothing gets through, ticked or not.</p><p>${doc('https://support.discord.com/hc/en-us/articles/206141927-How-is-the-permission-hierarchy-structured', 'Discord permission hierarchy')}</p>`, true)}</th>
           </tr></thead>
           <tbody>
             ${[...groups].map(
               ([category, list]) => html`<tr class="group"><td colspan="3">${category}</td></tr>
                 ${list.map(
-                  (channel) => html`<tr>
+                  (channel) => html`<tr class="${channel.bot?.read === false || channel.bot?.post === false ? 'noaccess' : ''}">
                     <td>${channel.kind === 'text' ? html`<span class="muted">#</span> ` : ''}${channel.name}${channel.kind === 'text' ? '' : html` <span class="muted small">${KIND_LABEL[channel.kind]}</span>`}</td>
-                    <td class="center"><input type="checkbox" name="read" value="${channel.id}" aria-label="Allow MCP reading in ${channel.name}" ${readSet.has(channel.id) ? 'checked' : ''}></td>
+                    <td class="center"><input type="checkbox" name="read" value="${channel.id}" aria-label="Allow MCP reading in ${channel.name}" ${readSet.has(channel.id) ? 'checked' : ''}>${channel.bot?.read === false ? html`<br><span class="muted small">bot can't read here</span>` : ''}</td>
                     <td class="center">${channel.kind === 'forum'
                       ? html`<span class="muted small">n/a</span>`
-                      : html`<input type="checkbox" name="post" value="${channel.id}" aria-label="Allow MCP posting in ${channel.name}" ${postSet.has(channel.id) ? 'checked' : ''}>`}</td>
+                      : html`<input type="checkbox" name="post" value="${channel.id}" aria-label="Allow MCP posting in ${channel.name}" ${postSet.has(channel.id) ? 'checked' : ''}>${channel.bot?.post === false ? html`<br><span class="muted small">bot can't post here</span>` : ''}`}</td>
                   </tr>`
                 )}`
             )}
           </tbody>
         </table>
         <p class="muted small">${readSummary}</p>
+        ${hasBotPermissionLimits
+          ? html`<p class="muted small">Channels marked "bot can't…" need the bot's role to get View Channel and Read Message History (Read) or Send Messages (Post) in Discord.</p>`
+          : ''}
         <button class="button">Save channels</button>
       </form>
     </section>
@@ -492,6 +498,7 @@ button.link{background:none;border:0;color:var(--muted);cursor:pointer;font:inhe
 table.grid{width:100%;border-collapse:collapse;margin-top:8px}.grid th,.grid td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
 .grid th{font-size:12px;text-transform:uppercase;color:var(--muted);font-weight:600}.grid .center{text-align:center}
 .grid tr.group td{font-size:12px;text-transform:uppercase;color:var(--muted);padding-top:16px}
+tr.noaccess td:first-child { opacity: .55 }
 .help{display:inline-block;position:relative;margin-left:4px;vertical-align:middle;font-size:13px;font-weight:400;text-transform:none;letter-spacing:normal}
 .help summary{list-style:none;cursor:pointer;width:17px;height:17px;border-radius:50%;background:#4e5058;color:#fff;font-size:11px;font-weight:700;line-height:17px;text-align:center;user-select:none}
 .help summary::-webkit-details-marker{display:none}.help summary:hover,.help[open] summary{background:var(--accent)}

@@ -294,7 +294,10 @@ export function createMcpHandler(deps: McpDeps) {
               : 'every channel (this server allows all)';
         const readable = channels.length
           ? `You may read ${scope}, their threads and the task threads:\n${channels
-              .map((c) => `- #${neutralize(c.name)} (${c.kind}${c.category ? `, ${neutralize(c.category)}` : ''}): ${c.id}`)
+              .map(
+                (c) =>
+                  `- #${neutralize(c.name)} (${c.kind}${c.category ? `, ${neutralize(c.category)}` : ''}): ${c.id}${c.bot?.read === false ? ' (bot lacks Discord access)' : ''}`
+              )
               .join('\n')}`
           : 'No readable channels.';
         const postable = deps.guilds.mcpPostChannels(guildId);
@@ -302,7 +305,10 @@ export function createMcpHandler(deps: McpDeps) {
           ? `You may post in:\n${directoryChannels
               .filter((channel) => postable.includes(channel.id))
               .sort((a, b) => a.position - b.position)
-              .map((channel) => `- #${neutralize(channel.name)}: ${channel.id}`)
+              .map(
+                (channel) =>
+                  `- #${neutralize(channel.name)}: ${channel.id}${channel.bot?.post === false ? ' (bot lacks Discord access)' : ''}`
+              )
               .join('\n')}`
           : 'Posting: no channels (a server admin can allow some on the MCP page).';
         return `${readable}\n\n${posting}`;

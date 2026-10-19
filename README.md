@@ -51,7 +51,7 @@ Until a server saves a Devin key, every trigger there gets a private reply point
 4. **Tunnel.**
    - **Quick tunnel** (default, `COMPOSE_PROFILES=quick-tunnel`): `docker compose logs tunnel` shows a `https://<words>.trycloudflare.com` URL. Set it as `PUBLIC_URL`, add `<that URL>/auth/callback` to the Discord app's redirects and run `docker compose up -d bridge`. The URL changes whenever the tunnel container restarts.
    - **Named tunnel**: in Cloudflare Zero Trust → Networks → Tunnels, create a tunnel with a public hostname pointing to `http://bridge:3000`. Set `COMPOSE_PROFILES=named-tunnel`, `TUNNEL_TOKEN` and `PUBLIC_URL=https://<hostname>`, then `docker compose up -d`.
-5. **Set up a server.** Open `PUBLIC_URL`, sign in with Discord, click **Add to Discord** for the server, then **Configure**: paste a Devin service user key (Devin → Settings → Service users) and the org ID. Give the service user's role **`UseDevinSessions`** (create and view sessions) and **`ManageOrgSessions`** (send messages, stop and sleep; see [Devin API calls](#devin-api-calls)). The key is checked with read-only API calls before it's saved and is never shown again.
+5. **Set up a server.** Open `PUBLIC_URL`, sign in with Discord, click **Add to Discord** for the server, then **Configure**: paste a Devin service user key (Devin → Settings → Service users) and the org ID. Give the service user's role **`UseDevinSessions`** (create sessions), **`ViewOrgSessions`** (follow them) and **`ManageOrgSessions`** (send messages, stop and sleep), plus **`ImpersonateOrgSessions`** if you map Discord members to Devin users. See [Devin API calls](#devin-api-calls). The key is checked with read-only API calls before it's saved and is never shown again.
 
 Run exactly one copy per bot token. Two copies would both relay every message.
 
@@ -77,13 +77,13 @@ then open http://localhost:3000/auth/dev. It signs in as a seeded admin of a fak
 
 ## Devin API calls
 
-Every call uses the server's service user key against the [Devin API v3](https://docs.devin.ai/api-reference/v3/overview) ([OpenAPI](https://docs.devin.ai/v3-openapi.json)).
+Every call uses the server's service user key against the [Devin API v3](https://docs.devin.ai/api-reference/v3/overview) ([OpenAPI](https://docs.devin.ai/v3-openapi.json)). Permissions are from the [v3 permissions reference](https://docs.devin.ai/api-reference/v3/overview) and each endpoint's page.
 
 | What | Call | Permission |
 | --- | --- | --- |
-| Start a task | `POST /v3/organizations/{org}/sessions` | `UseDevinSessions` |
-| Follow a task | `GET …/sessions/{id}`, `GET …/sessions/{id}/messages` | `UseDevinSessions` |
-| Reply (also wakes a sleeping session) | `POST …/sessions/{id}/messages` | `ManageOrgSessions` |
+| Start a task | `POST /v3/organizations/{org}/sessions` | `UseDevinSessions`; `ImpersonateOrgSessions` for mapped members (`create_as_user_id`) |
+| Follow a task | `GET …/sessions/{id}`, `GET …/sessions/{id}/messages` | `ViewOrgSessions` |
+| Reply (also wakes a sleeping session) | [`POST …/sessions/{id}/messages`](https://docs.devin.ai/api-reference/v3/sessions/post-organizations-sessions-messages) | `ManageOrgSessions` |
 | Stop | [`DELETE …/sessions/{id}`](https://docs.devin.ai/api-reference/v3/sessions/delete-organizations-sessions) | Its creator, or `ManageOrgSessions` |
 | Sleep | [`POST …/sessions/{id}/archive`](https://docs.devin.ai/api-reference/v3/sessions/post-organizations-sessions-archive) | `ManageOrgSessions` |
 | Wake after sleep | [`POST …/sessions/{id}/unarchive`](https://docs.devin.ai/api-reference/v3/sessions/post-organizations-sessions-unarchive), after the reply | `ManageOrgSessions` |

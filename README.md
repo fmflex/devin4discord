@@ -76,7 +76,7 @@ The token decides which server a call is for. The MCP page picks separate Read a
 4. **Tunnel.**
    - **Quick tunnel** (default, `COMPOSE_PROFILES=quick-tunnel`): `docker compose logs tunnel` shows a `https://<words>.trycloudflare.com` URL. Set it as `PUBLIC_URL`, add `<that URL>/auth/callback` to the Discord app's redirects and run `docker compose up -d bridge`. The URL changes whenever the tunnel container restarts.
    - **Named tunnel**: in Cloudflare Zero Trust → Networks → Tunnels, create a tunnel with a public hostname pointing to `http://bridge:3000`. Set `COMPOSE_PROFILES=named-tunnel`, `TUNNEL_TOKEN` and `PUBLIC_URL=https://<hostname>`, then `docker compose up -d`.
-5. **Set up a server.** Open `PUBLIC_URL`, sign in with Discord, click **Add to Discord** for the server, then **Configure**: paste a Devin service user key (Devin → Settings → Service users) and the org ID. Give the service user's role **`UseDevinSessions`** (create sessions), **`ViewOrgSessions`** (follow them) and **`ManageOrgSessions`** (send messages, stop and sleep), plus **`ImpersonateOrgSessions`** if you map Discord members to Devin users. See [Devin API calls](#devin-api-calls). The key is checked with read-only API calls before it's saved and is never shown again.
+5. **Set up a server.** Open `PUBLIC_URL`, sign in with Discord, click **Add to Discord** for the server, then **Configure**: paste a Devin service user key (Devin → Settings → Service users) and the org ID. Give the service user's role **`UseDevinSessions`** (create sessions), **`ViewOrgSessions`** (follow them) and **`ManageOrgSessions`** (send messages, stop and sleep), plus **`ImpersonateOrgSessions`** and **`ViewOrgMembership`** if you map Discord members to Devin users. Only Discord Administrators can edit that mapping; each Devin user is checked to be in the org, and every change is audited. See [Devin API calls](#devin-api-calls). The key is checked with read-only API calls before it's saved and is never shown again.
 
 Run exactly one copy per bot token. Two copies would both relay every message.
 
@@ -107,6 +107,7 @@ Every call uses the server's service user key against the [Devin API v3](https:/
 | What | Call | Permission |
 | --- | --- | --- |
 | Start a task | `POST /v3/organizations/{org}/sessions` | `UseDevinSessions`; `ImpersonateOrgSessions` for mapped members (`create_as_user_id`) |
+| Check a mapped Devin user (on save) | [`GET /v3beta1/organizations/{org}/members/users/{id}`](https://docs.devin.ai/api-reference/v3/users/get-organization-user) | `ViewOrgMembership` |
 | Follow a task | `GET …/sessions/{id}`, `GET …/sessions/{id}/messages` | `ViewOrgSessions` |
 | Reply (also wakes a sleeping session) | [`POST …/sessions/{id}/messages`](https://docs.devin.ai/api-reference/v3/sessions/post-organizations-sessions-messages) | `ManageOrgSessions` |
 | Stop | [`DELETE …/sessions/{id}`](https://docs.devin.ai/api-reference/v3/sessions/delete-organizations-sessions) | Its creator, or `ManageOrgSessions` |

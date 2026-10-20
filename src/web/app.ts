@@ -3,7 +3,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { deleteCookie, getSignedCookie, setSignedCookie } from 'hono/cookie';
 import { secureHeaders } from 'hono/secure-headers';
 import { randomToken, safeEqual, type Secrets } from '../crypto.ts';
-import { verifyDevinCredentials } from '../devin.ts';
+import { DEVIN_USER_ID, verifyDevinCredentials, verifyDevinOrgUser } from '../devin.ts';
 import { MAX_BODY_BYTES as MAX_MCP_BODY_BYTES, newMcpToken } from '../mcp.ts';
 import type { Directory } from '../directory.ts';
 import { DEFAULT_CONTEXT_MESSAGES, MAX_CONTEXT_MESSAGES, type Actor, type GuildStore } from '../guilds.ts';
@@ -124,12 +124,27 @@ function parseUserMap(raw: string): Record<string, string> {
   const map: Record<string, string> = {};
   for (const line of raw.split('\n').map((l) => l.trim()).filter(Boolean)) {
     const [discordId, devinId, extra] = line.split(/[\s:,]+/);
-    if (!discordId || !devinId || extra || !/^\d{15,22}$/.test(discordId)) {
-      throw new Error(`"${line}" should be a Discord user ID and a Devin user ID.`);
+    if (!discordId || !devinId || extra || !/^\d{15,22}$/.test(discordId) || !DEVIN_USER_ID.test(devinId)) {
+      throw new Error(`"${line}" should be a Discord user ID and a Devin user ID (user-…).`);
     }
+    if (discordId in map) throw new Error(`Discord user ${discordId} is listed more than once.`);
     map[discordId] = devinId;
   }
   return map;
+}
+
+/** Every added, changed and removed mapping, for the audit log. Empty when nothing changed. */
+function userMapChanges(before: Record<string, string>, after: Record<string, string>): string[] {
+  const changes: string[] = [];
+  for (const [discordId, devinId] of Object.entries(after)) {
+    const old = before[discordId];
+    if (old === undefined) changes.push(`added ${discordId} → ${devinId}`);
+    else if (old !== devinId) changes.push(`changed ${discordId}: ${old} → ${devinId}`);
+  }
+  for (const [discordId, devinId] of Object.entries(before)) {
+    if (!(discordId in after)) changes.push(`removed ${discordId} → ${devinId}`);
+  }
+  return changes;
 }
 
 function describeRule(name: string, rule: RoleRule) {
@@ -347,7 +362,8 @@ export function createWebApp(deps: WebDeps) {
 
   app.get('/g/:guildId/devin', (c) => {
     const { session, guild } = ctx(c);
-    return c.html(devinPage(session, guild, devinForm(guild.id), noticeFrom(c)));
+    const canEditUserMap = c.get('member').isAdmin;
+    return c.html(devinPage(session, guild, devinForm(guild.id), noticeFrom(c), canEditUserMap));
   });
 
   app.post('/g/:guildId/devin', async (c) => {
@@ -363,25 +379,34 @@ export function createWebApp(deps: WebDeps) {
       userMap: field(form, 'user_map'),
       instructions: field(form, 'instructions')
     };
+    // Mappings decide which Devin user tasks run as, so only Discord Administrators may edit them.
+    const canEditUserMap = c.get('member').isAdmin;
     const fail = (text: string) =>
-      c.html(devinPage(session, guild, submitted, { kind: 'error', text }), 400);
+      c.html(devinPage(session, guild, submitted, { kind: 'error', text }, canEditUserMap), 400);
     try {
       if (!/^[\w-]{3,100}$/.test(orgId)) return fail('Enter the organization ID, like org-abc123.');
       if (!newKey && !existing) return fail('Enter the Devin API key.');
       const repos = parseRepos(submitted.repos);
       const userMap = parseUserMap(submitted.userMap);
+      const mapChanges = userMapChanges(existing?.userMap ?? {}, userMap);
+      if (mapChanges.length && !canEditUserMap) {
+        return fail('Only Discord Administrators can change "Run as Devin users".');
+      }
       const apiKey = newKey || deps.secrets.decrypt(existing!.apiKeyEncrypted, guild.id);
+      const credentialsChanged = Boolean(newKey) || orgId !== existing?.orgId;
       const changes: string[] = [];
-      if (newKey || orgId !== existing?.orgId) {
+      if (credentialsChanged) {
         await verifyDevinCredentials({ apiKey, orgId, baseUrl: deps.devinApiUrl }, fetchImpl);
         if (newKey) changes.push(`key ending …${newKey.slice(-4)}`);
         if (orgId !== existing?.orgId) changes.push(`org ${orgId}`);
       }
+      if (mapChanges.length || credentialsChanged) {
+        for (const userId of new Set(Object.values(userMap))) {
+          await verifyDevinOrgUser({ apiKey, orgId, baseUrl: deps.devinApiUrl, userId }, fetchImpl);
+        }
+      }
       if (repos.join(',') !== (existing?.defaultRepos ?? []).join(',')) {
         changes.push(`repos: ${repos.join(', ') || 'none'}`);
-      }
-      if (JSON.stringify(userMap) !== JSON.stringify(existing?.userMap ?? {})) {
-        changes.push(`${Object.keys(userMap).length} Devin user mappings`);
       }
       deps.guilds.saveDevin(guild.id, {
         apiKeyEncrypted: newKey ? deps.secrets.encrypt(newKey, guild.id) : existing!.apiKeyEncrypted,
@@ -395,6 +420,7 @@ export function createWebApp(deps: WebDeps) {
         changes.push('instructions');
       }
       if (changes.length) deps.guilds.audit(guild.id, actor, 'devin.update', changes.join('; '));
+      if (mapChanges.length) deps.guilds.audit(guild.id, actor, 'devin.user_map', mapChanges.join('; '));
     } catch (error) {
       return fail(error instanceof Error ? error.message : String(error));
     }

@@ -12,7 +12,7 @@ Hand Discord messages to Devin and follow the work in a Discord thread. One host
 - **Follow along:** the bot opens a thread per task and posts Devin's messages, PR links and status changes there. The member who started the task is added to the thread and pinged on new PRs and when Devin needs a reply.
 - **Give feedback:** type in the thread, images included. Messages from members allowed to reply are forwarded to Devin (marked 📨). Messages that start with `//` are not forwarded. Mentioning the bot in a task thread is a reply, not a new task. For busy threads, turn on **Only forward messages that @mention Devin** on the **Channels** page.
 - **Stop or sleep:** `@Devin stop` / `@Devin sleep` in the thread, the **Stop** / **Sleep** buttons on the bot's first message in the thread, or `/devin stop` / `/devin sleep`. Stop ends the Devin session for good and the thread stops syncing. Sleep pauses it; the next forwarded reply wakes Devin. The bot posts who did it in the thread and writes it to the audit log. Members who aren't allowed get a private "you can't do that".
-- **Overview:** `/devin status` inside a thread, `/devin list` anywhere.
+- **Overview:** `/devin status` inside a thread, `/devin list` anywhere (only tasks in threads you can see).
 
 ## Who can do what
 

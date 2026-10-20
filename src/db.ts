@@ -117,7 +117,18 @@ export const MIGRATIONS: string[] = [
      guild_id text not null references guilds (guild_id) on delete cascade,
      channel_id text not null,
      primary key (guild_id, channel_id)
-   );`
+   );`,
+
+  // 7: a start reserves its row (pending = 1) before the Devin call, and one
+  // message starts at most one task. Older duplicates keep only the newest link.
+  `alter table tasks add column pending integer not null default 0;
+   update tasks set source_message_id = null
+    where source_message_id is not null
+      and rowid not in (
+        select max(rowid) from tasks where source_message_id is not null group by source_message_id
+      );
+   drop index if exists tasks_source_idx;
+   create unique index tasks_source_unique on tasks (source_message_id) where source_message_id is not null;`
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

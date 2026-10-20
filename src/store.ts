@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 
 export type TaskRow = {
@@ -16,6 +17,8 @@ export type TaskRow = {
   stoppedBy: string | null;
   /** Discord ID of whoever put the task to sleep; cleared when a reply wakes it. */
   sleptBy: string | null;
+  /** Reserved by a start that hasn't opened its thread yet; counts toward limits only. */
+  pending: boolean;
   createdAt: number;
   updatedAt: number;
 };
@@ -34,6 +37,7 @@ type Raw = {
   active: number;
   stopped_by: string | null;
   slept_by: string | null;
+  pending: number;
   created_at: number;
   updated_at: number;
 };
@@ -53,6 +57,7 @@ function fromRaw(raw: Raw): TaskRow {
     active: raw.active === 1,
     stoppedBy: raw.stopped_by,
     sleptBy: raw.slept_by,
+    pending: raw.pending === 1,
     createdAt: raw.created_at,
     updatedAt: raw.updated_at
   };
@@ -62,6 +67,10 @@ export type NewTask = Pick<
   TaskRow,
   'taskId' | 'threadId' | 'sourceMessageId' | 'openerId' | 'title' | 'url'
 > & { guildId: string };
+
+export type Reservation = { guildId: string; openerId: string; sourceMessageId: string | null };
+
+const PENDING_PREFIX = 'pending:';
 
 export type TaskPatch = Partial<
   Pick<TaskRow, 'stateLabel' | 'cursor' | 'pullRequests' | 'active' | 'guildId' | 'stoppedBy' | 'sleptBy'>
@@ -95,13 +104,60 @@ export class TaskStore {
       );
   }
 
+  /**
+   * Claims a task slot before any Devin or Discord call: the row counts toward
+   * the opener's limits straight away. Null when the source message already has
+   * a task. Returns the row's provisional task ID.
+   */
+  reserve(reservation: Reservation): string | null {
+    const key = `${PENDING_PREFIX}${randomUUID()}`;
+    const now = Date.now();
+    const result = this.db
+      .prepare(
+        `insert into tasks (task_id, agent, guild_id, thread_id, source_message_id, opener_id, title, url, pending, created_at, updated_at)
+         values (?, 'devin', ?, ?, ?, ?, '', '', 1, ?, ?)
+         on conflict do nothing`
+      )
+      .run(key, reservation.guildId, key, reservation.sourceMessageId, reservation.openerId, now, now);
+    return result.changes ? key : null;
+  }
+
+  /** Records the Devin session on a reserved row; the session ID becomes the row's ID. */
+  attachSession(key: string, session: { taskId: string; title: string; url: string }) {
+    this.db
+      .prepare('update tasks set task_id = ?, title = ?, url = ?, updated_at = ? where task_id = ? and pending = 1')
+      .run(session.taskId, session.title, session.url, Date.now(), key);
+  }
+
+  /** The thread exists: the task is now visible, synced and controllable. */
+  complete(taskId: string, threadId: string) {
+    this.db
+      .prepare('update tasks set thread_id = ?, pending = 0, updated_at = ? where task_id = ? and pending = 1')
+      .run(threadId, Date.now(), taskId);
+  }
+
+  /** Drops a reservation whose start failed. */
+  release(taskId: string) {
+    this.db.prepare('delete from tasks where task_id = ? and pending = 1').run(taskId);
+  }
+
+  /** Reservations left behind by a restart mid-start. */
+  pendingRows(): TaskRow[] {
+    return (this.db.prepare('select * from tasks where pending = 1').all() as Raw[]).map(fromRaw);
+  }
+
+  /** Whether `taskId` is a reservation's own ID rather than a Devin session's. */
+  static isProvisional(taskId: string) {
+    return taskId.startsWith(PENDING_PREFIX);
+  }
+
   byId(taskId: string): TaskRow | null {
-    const raw = this.db.prepare('select * from tasks where task_id = ?').get(taskId);
+    const raw = this.db.prepare('select * from tasks where task_id = ? and pending = 0').get(taskId);
     return raw ? fromRaw(raw as Raw) : null;
   }
 
   byThread(threadId: string): TaskRow | null {
-    const raw = this.db.prepare('select * from tasks where thread_id = ?').get(threadId);
+    const raw = this.db.prepare('select * from tasks where thread_id = ? and pending = 0').get(threadId);
     return raw ? fromRaw(raw as Raw) : null;
   }
 
@@ -114,14 +170,14 @@ export class TaskStore {
 
   active(): TaskRow[] {
     return (
-      this.db.prepare('select * from tasks where active = 1 order by updated_at').all() as Raw[]
+      this.db.prepare('select * from tasks where active = 1 and pending = 0 order by updated_at').all() as Raw[]
     ).map(fromRaw);
   }
 
   recent(guildId: string, limit: number): TaskRow[] {
     return (
       this.db
-        .prepare('select * from tasks where guild_id = ? order by created_at desc limit ?')
+        .prepare('select * from tasks where guild_id = ? and pending = 0 order by created_at desc limit ?')
         .all(guildId, limit) as Raw[]
     ).map(fromRaw);
   }
@@ -129,7 +185,7 @@ export class TaskStore {
   /** Tasks from before servers were tracked; their guild is looked up on start-up. */
   withoutGuild(): TaskRow[] {
     return (
-      this.db.prepare('select * from tasks where guild_id is null').all() as Raw[]
+      this.db.prepare('select * from tasks where guild_id is null and pending = 0').all() as Raw[]
     ).map(fromRaw);
   }
 

@@ -66,7 +66,7 @@ function fromRaw(raw: Raw): TaskRow {
 export type NewTask = Pick<
   TaskRow,
   'taskId' | 'threadId' | 'sourceMessageId' | 'openerId' | 'title' | 'url'
-> & { guildId: string };
+> & { guildId: string; mcpKeyHash?: string | null };
 
 export type Reservation = { guildId: string; openerId: string; sourceMessageId: string | null };
 
@@ -88,8 +88,8 @@ export class TaskStore {
     const now = Date.now();
     this.db
       .prepare(
-        `insert into tasks (task_id, agent, guild_id, thread_id, source_message_id, opener_id, title, url, created_at, updated_at)
-         values (?, 'devin', ?, ?, ?, ?, ?, ?, ?, ?)`
+        `insert into tasks (task_id, agent, guild_id, thread_id, source_message_id, opener_id, title, url, mcp_key_hash, created_at, updated_at)
+         values (?, 'devin', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         task.taskId,
@@ -99,6 +99,7 @@ export class TaskStore {
         task.openerId,
         task.title,
         task.url,
+        task.mcpKeyHash ?? null,
         now,
         now
       );
@@ -123,10 +124,12 @@ export class TaskStore {
   }
 
   /** Records the Devin session on a reserved row; the session ID becomes the row's ID. */
-  attachSession(key: string, session: { taskId: string; title: string; url: string }) {
+  attachSession(key: string, session: { taskId: string; title: string; url: string; mcpKeyHash: string | null }) {
     this.db
-      .prepare('update tasks set task_id = ?, title = ?, url = ?, updated_at = ? where task_id = ? and pending = 1')
-      .run(session.taskId, session.title, session.url, Date.now(), key);
+      .prepare(
+        'update tasks set task_id = ?, title = ?, url = ?, mcp_key_hash = ?, updated_at = ? where task_id = ? and pending = 1'
+      )
+      .run(session.taskId, session.title, session.url, session.mcpKeyHash, Date.now(), key);
   }
 
   /** The thread exists: the task is now visible, synced and controllable. */
@@ -158,6 +161,12 @@ export class TaskStore {
 
   byThread(threadId: string): TaskRow | null {
     const raw = this.db.prepare('select * from tasks where thread_id = ? and pending = 0').get(threadId);
+    return raw ? fromRaw(raw as Raw) : null;
+  }
+
+  /** The task whose session was given this MCP task key (by hash). */
+  byMcpKey(keyHash: string): TaskRow | null {
+    const raw = this.db.prepare('select * from tasks where mcp_key_hash = ? and pending = 0').get(keyHash);
     return raw ? fromRaw(raw as Raw) : null;
   }
 

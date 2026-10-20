@@ -4,11 +4,12 @@ import { test } from 'node:test';
 import { PermissionsBitField } from 'discord.js';
 import { Bot, unconfiguredReply, type ChannelRef } from '../src/bot.ts';
 import { Bridge, type ChatPort } from '../src/bridge.ts';
-import { Secrets } from '../src/crypto.ts';
+import { Secrets, sha256 } from '../src/crypto.ts';
 import { discordDirectory } from '../src/discord.ts';
 import { MIGRATIONS, SCHEMA_VERSION, migrate, openDatabase } from '../src/db.ts';
 import type { DevinApi, StartTaskInput } from '../src/devin.ts';
 import { GuildStore } from '../src/guilds.ts';
+import { newMcpToken } from '../src/mcp.ts';
 import {
   NO_LIMITS,
   ADMIN_ROLE,
@@ -592,10 +593,10 @@ test('a thread that fails to open terminates the session, frees the slot and is 
   assert.equal(retry.ok && retry.started, true);
 });
 
-test('migration 7 keeps one task per source message', () => {
+test('migration 8 keeps one task per source message', () => {
   const db = new DatabaseSync(':memory:');
-  for (const sql of MIGRATIONS.slice(0, 6)) db.exec(sql);
-  db.exec('pragma user_version = 6');
+  for (const sql of MIGRATIONS.slice(0, 7)) db.exec(sql);
+  db.exec('pragma user_version = 7');
   const insert = db.prepare(
     `insert into tasks (task_id, agent, guild_id, thread_id, source_message_id, opener_id, title, url, created_at, updated_at)
      values (?, 'devin', 'g', ?, 'm1', '10', 't', 'u', 1, 1)`
@@ -606,4 +607,33 @@ test('migration 7 keeps one task per source message', () => {
   const tasks = new TaskStore(db);
   assert.equal(tasks.bySourceMessage('m1')?.taskId, 'devin-2');
   assert.equal(tasks.reserve({ guildId: 'g', openerId: '10', sourceMessageId: 'm1' }), null);
+});
+
+test('/devin list hides a task when the visibility check fails', async () => {
+  const t = botSetup();
+  t.configure();
+  const admin = member({ isAdmin: true });
+  await t.bot.startFromPrompt(G, admin, channel, 'staff task', []);
+  const none = await t.bot.list(G, admin, async () => {
+    throw new Error('Missing Access');
+  });
+  assert.deepEqual(none, { ok: true, reply: 'No tasks you can see yet.' });
+});
+
+test('with an MCP token, each task gets its own MCP task key in the prompt', async () => {
+  const t = botSetup();
+  t.configure();
+  const admin = member({ isAdmin: true });
+  await t.bot.startFromPrompt(G, admin, channel, 'no mcp', []);
+  assert.doesNotMatch(t.started[0].prompt, /task key/i);
+
+  const token = newMcpToken();
+  t.guilds.setMcpToken(G, token.hash, token.hint);
+  await t.bot.startFromPrompt(G, admin, channel, 'one', []);
+  await t.bot.startFromPrompt(G, admin, channel, 'two', []);
+  const keys = t.started.slice(1).map((s) => /Discord MCP task key: (d4dt_\S+)/.exec(s.prompt)?.[1]);
+  assert.ok(keys[0] && keys[1] && keys[0] !== keys[1]);
+  const owners = keys.map((key) => t.tasks.byMcpKey(sha256(key!))?.title);
+  assert.deepEqual(owners, ['one', 'two']);
+  assert.equal(t.tasks.byMcpKey(sha256(token.token)), null);
 });

@@ -176,6 +176,41 @@ export async function verifyDevinCredentials(
   return { name: self.service_user_name ?? self.principal_type ?? 'API key' };
 }
 
+/** Devin user IDs as the API returns them, e.g. `user-0123abcd`. */
+export const DEVIN_USER_ID = /^user-[\w-]{1,100}$/;
+
+/**
+ * Checks that `userId` is a member of the org with
+ * `GET /v3beta1/organizations/{org}/members/users/{id}` (needs `ViewOrgMembership`).
+ */
+export async function verifyDevinOrgUser(
+  input: { apiKey: string; orgId: string; baseUrl: string; userId: string },
+  fetchImpl: typeof fetch = fetch
+): Promise<void> {
+  let user: { user_id?: string };
+  try {
+    user = await devinRequest(
+      fetchImpl,
+      input.baseUrl,
+      input.apiKey,
+      `/v3beta1/organizations/${encodeURIComponent(input.orgId)}/members/users/${encodeURIComponent(input.userId)}`
+    );
+  } catch (error) {
+    if (error instanceof DevinApiError && error.status === 404) {
+      throw new Error(`${input.userId} isn't a user in organization ${input.orgId}.`);
+    }
+    if (error instanceof DevinApiError && (error.status === 401 || error.status === 403)) {
+      throw new Error(
+        `This key can't look up users in organization ${input.orgId}. Give the service user's role ViewOrgMembership to use "Run as Devin users".`
+      );
+    }
+    throw error;
+  }
+  if (user.user_id && user.user_id !== input.userId) {
+    throw new Error(`Devin returned a different user for ${input.userId}.`);
+  }
+}
+
 export class DevinClient {
   private readonly config: DevinConfig;
   private readonly fetch: typeof fetch;

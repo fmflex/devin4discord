@@ -317,7 +317,7 @@ test('MCP read and post channels are configured together with admin opt-in', asy
   const { session, csrf } = await signIn(t);
   const allChannelFallback = await (await t.request(`/g/${G}/mcp`, { headers: { cookie: session } })).text();
   assert.doesNotMatch(allChannelFallback, /Channels marked "bot can't/);
-  assert.match(allChannelFallback, /Reading: none ticked, so it follows the Channels tab: every channel\./);
+  assert.match(allChannelFallback, /Reading: none ticked, so it follows the Channels tab: channels @everyone can see\./);
   t.guilds.setChannels(G, ['400000000000000001'], null);
   t.directory.channels = async () => [
     { id: '400000000000000001', name: 'general', kind: 'text', category: null, position: 0, bot: { read: false, post: true } },
@@ -336,7 +336,7 @@ test('MCP read and post channels are configured together with admin opt-in', asy
   assert.match(page, /About MCP read channels/);
   assert.match(page, /About MCP posting channels/);
   assert.match(page, /Channels Devin may read through MCP/);
-  assert.match(page, /With none ticked, it follows the Allowed list on the Channels tab \(every channel when that's empty too\)\./);
+  assert.match(page, /With none ticked, it follows the Allowed list on the Channels tab\. When that's empty too, it can only read channels <strong>@everyone<\/strong> can see\./);
   assert.match(page, /bot can't read here/);
   assert.match(page, /bot can't post here/);
   assert.match(page, /class="noaccess"/);
@@ -440,4 +440,56 @@ test('the channels page saves the mention settings and rejects bad context count
   assert.equal(t.guilds.settings(G)?.contextMessages, 0);
   assert.equal(t.guilds.settings(G)?.mentionOnlyReplies, true);
   assert.match(t.guilds.auditLog(G)[0].detail, /context messages: 0; only @mentions forwarded: yes/);
+});
+
+test('"Run as Devin users" takes only org users, only from Discord Administrators, and audits every change', async () => {
+  const t = setup();
+  const { session, csrf } = await signIn(t);
+  t.responses.set('GET /v3/self', { status: 200, body: { principal_type: 'service_user', org_id: 'org-1' } });
+  t.responses.set('GET /v3/organizations/org-1/sessions', { status: 200, body: { items: [] } });
+  t.responses.set('GET /v3beta1/organizations/org-1/members/users/user-alice', { status: 200, body: { user_id: 'user-alice' } });
+  t.responses.set('GET /v3beta1/organizations/org-1/members/users/user-bob', { status: 200, body: { user_id: 'user-bob' } });
+  const form = { _csrf: csrf, api_key: 'cog_live_secret_4f2a', org_id: 'org-1', repos: '', user_map: '', instructions: '' };
+  const path = `/g/${G}/devin`;
+  assert.equal((await post(t, path, session, form)).status, 302);
+  const keep = { ...form, api_key: '' };
+
+  const badFormat = await post(t, path, session, { ...keep, user_map: '100000000000000002 org-admin' });
+  assert.equal(badFormat.status, 400);
+  assert.match(await badFormat.text(), /Devin user ID \(user-…\)/);
+  const notMember = await post(t, path, session, { ...keep, user_map: '100000000000000002 user-mallory' });
+  assert.equal(notMember.status, 400);
+  assert.match(await notMember.text(), /user-mallory isn(&#39;|')t a user in organization org-1/);
+  assert.deepEqual(t.guilds.devin(G)!.userMap, {});
+
+  t.calls.length = 0;
+  const map = '100000000000000002 user-alice\n100000000000000003 user-bob';
+  assert.equal((await post(t, path, session, { ...keep, user_map: map })).status, 302);
+  assert.deepEqual(t.guilds.devin(G)!.userMap, { '100000000000000002': 'user-alice', '100000000000000003': 'user-bob' });
+  assert.deepEqual(
+    t.calls.map((call) => new URL(call.url).pathname),
+    ['/v3beta1/organizations/org-1/members/users/user-alice', '/v3beta1/organizations/org-1/members/users/user-bob']
+  );
+  assert.equal(t.guilds.auditLog(G)[0].action, 'devin.user_map');
+  assert.equal(t.guilds.auditLog(G)[0].detail, 'added 100000000000000002 → user-alice; added 100000000000000003 → user-bob');
+
+  const changed = '100000000000000002 user-bob';
+  assert.equal((await post(t, path, session, { ...keep, user_map: changed })).status, 302);
+  assert.equal(
+    t.guilds.auditLog(G)[0].detail,
+    'changed 100000000000000002: user-alice → user-bob; removed 100000000000000003 → user-bob'
+  );
+
+  t.state.member = { id: USER, name: 'Dev', roleIds: [G, SETTINGS_ROLE], isAdmin: false, canManageGuild: true };
+  const page = await (await t.request(path, { headers: { cookie: session } })).text();
+  assert.match(page, /<textarea name="user_map"[^>]* readonly>/);
+  const denied = await post(t, path, session, { ...keep, user_map: '100000000000000002 user-alice' });
+  assert.equal(denied.status, 400);
+  assert.match(await denied.text(), /Only Discord Administrators can change/);
+  assert.deepEqual(t.guilds.devin(G)!.userMap, { '100000000000000002': 'user-bob' });
+  assert.equal(
+    (await post(t, path, session, { ...keep, user_map: changed, instructions: 'Open PRs as drafts.' })).status,
+    302
+  );
+  assert.equal(t.guilds.settings(G)?.instructions, 'Open PRs as drafts.');
 });

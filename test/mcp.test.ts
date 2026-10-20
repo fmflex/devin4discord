@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { openDatabase } from '../src/db.ts';
 import type { Directory } from '../src/directory.ts';
+import { sha256 } from '../src/crypto.ts';
 import { GuildStore } from '../src/guilds.ts';
 import { createMcpHandler, newMcpToken, type ChannelRef, type DiscordReader, type ReadMessage } from '../src/mcp.ts';
 import { TaskStore } from '../src/store.ts';
@@ -14,18 +15,22 @@ const SECRET_CH = '400000000000000002';
 const THREAD = '500000000000000001';
 const OTHER_THREAD = '500000000000000002';
 const SUB_THREAD = '500000000000000003';
+const PRIVATE_THREAD = '500000000000000004';
 const MSG = '600000000000000001';
+const KEY = `d4dt_${'a'.repeat(43)}`;
+const OTHER_KEY = `d4dt_${'z'.repeat(43)}`;
 
 function setup() {
   const db = openDatabase(':memory:');
   const guilds = new GuildStore(db);
   const tasks = new TaskStore(db);
   const channels = new Map<string, ChannelRef>([
-    [GENERAL, { id: GENERAL, guildId: G, name: 'general', parentId: null, isThread: false }],
-    [SECRET_CH, { id: SECRET_CH, guildId: G, name: 'staff', parentId: null, isThread: false }],
-    [SUB_THREAD, { id: SUB_THREAD, guildId: G, name: 'a thread', parentId: GENERAL, isThread: true }],
-    [THREAD, { id: THREAD, guildId: G, name: 'Devin: fix', parentId: SECRET_CH, isThread: true }],
-    [OTHER_THREAD, { id: OTHER_THREAD, guildId: OTHER, name: 'Devin: other', parentId: null, isThread: true }]
+    [GENERAL, { id: GENERAL, guildId: G, name: 'general', parentId: null, isThread: false, isPrivate: false, isPublic: true }],
+    [SECRET_CH, { id: SECRET_CH, guildId: G, name: 'staff', parentId: null, isThread: false, isPrivate: false, isPublic: false }],
+    [SUB_THREAD, { id: SUB_THREAD, guildId: G, name: 'a thread', parentId: GENERAL, isThread: true, isPrivate: false, isPublic: true }],
+    [PRIVATE_THREAD, { id: PRIVATE_THREAD, guildId: G, name: 'private', parentId: GENERAL, isThread: true, isPrivate: true, isPublic: true }],
+    [THREAD, { id: THREAD, guildId: G, name: 'Devin: fix', parentId: SECRET_CH, isThread: true, isPrivate: false, isPublic: false }],
+    [OTHER_THREAD, { id: OTHER_THREAD, guildId: OTHER, name: 'Devin: other', parentId: null, isThread: true, isPrivate: false, isPublic: true }]
   ]);
   const message = (content: string): ReadMessage => ({
     id: MSG, authorId: '100000000000000001', authorName: 'Mallory', bot: false, content,
@@ -53,8 +58,8 @@ function setup() {
     member: async () => null,
     roles: async () => [],
     channels: async () => [
-      { id: GENERAL, name: 'general', kind: 'text', category: null, position: 0 },
-      { id: SECRET_CH, name: 'staff', kind: 'text', category: null, position: 1, bot: { read: false, post: false } }
+      { id: GENERAL, name: 'general', kind: 'text', category: null, position: 0, public: true },
+      { id: SECRET_CH, name: 'staff', kind: 'text', category: null, position: 1, public: false, bot: { read: false, post: false } }
     ]
   };
   guilds.ensure(G, 'Test');
@@ -63,8 +68,8 @@ function setup() {
   guilds.setMcpToken(G, hash, hint);
   const other = newMcpToken();
   guilds.setMcpToken(OTHER, other.hash, other.hint);
-  tasks.insert({ taskId: 'devin-abc123', guildId: G, threadId: THREAD, sourceMessageId: null, openerId: '1', title: 'fix', url: 'u' });
-  tasks.insert({ taskId: 'devin-zzz999', guildId: OTHER, threadId: OTHER_THREAD, sourceMessageId: null, openerId: '1', title: 'x', url: 'u' });
+  tasks.insert({ taskId: 'devin-abc123', guildId: G, threadId: THREAD, sourceMessageId: null, openerId: '1', title: 'fix', url: 'u', mcpKeyHash: sha256(KEY) });
+  tasks.insert({ taskId: 'devin-zzz999', guildId: OTHER, threadId: OTHER_THREAD, sourceMessageId: null, openerId: '1', title: 'x', url: 'u', mcpKeyHash: sha256(OTHER_KEY) });
   const handle = createMcpHandler({ publicUrl: PUBLIC, guilds, tasks, directory, reader });
   let nextId = 1;
   const rpc = async (method: string, params: unknown = {}, headers: Record<string, string> = {}, auth = token) => {
@@ -118,25 +123,29 @@ test('MCP speaks Streamable HTTP: initialize, tools/list, notifications, GET', a
   assert.equal((await t.rpc('resources/list')).body.error.code, -32601);
 });
 
-test('MCP task-thread tools only reach this server\'s own, unstopped tasks', async () => {
+test('MCP task-thread tools need the task\'s own key, not a session ID', async () => {
   const t = setup();
-  const read = await t.tool('read_task_thread', { session_id: 'https://app.devin.ai/sessions/abc123' });
+  const read = await t.tool('read_task_thread', { task_key: KEY });
   assert.ok(!read.isError);
   assert.deepEqual(t.reads, [THREAD]);
 
-  const posted = await t.tool('post_to_task_thread', { session_id: 'devin-abc123', content: 'x'.repeat(2500) });
+  const posted = await t.tool('post_to_task_thread', { task_key: KEY, content: 'x'.repeat(2500) });
   assert.ok(!posted.isError);
   assert.deepEqual(t.sent.map((s) => s.channelId), [THREAD, THREAD]);
 
-  const foreign = await t.tool('post_to_task_thread', { session_id: 'devin-zzz999', content: 'hi' });
-  assert.equal(foreign.isError, true);
-  assert.match(foreign.content[0].text, /No Discord task in this server/);
+  for (const task_key of ['devin-abc123', 'https://app.devin.ai/sessions/abc123', `d4dt_${'b'.repeat(43)}`, OTHER_KEY]) {
+    const wrong = await t.tool('read_task_thread', { task_key });
+    assert.equal(wrong.isError, true, task_key);
+    assert.match(wrong.content[0].text, /No Discord task in this server for that task key/);
+  }
+  assert.equal((await t.tool('read_task_thread', { session_id: 'devin-abc123' })).isError, true);
+  assert.deepEqual(t.reads, [THREAD]);
 
-  assert.ok(!(await t.tool('add_reaction', { session_id: 'abc123', message_id: MSG, emoji: '👀' })).isError);
+  assert.ok(!(await t.tool('add_reaction', { task_key: KEY, message_id: MSG, emoji: '👀' })).isError);
   assert.deepEqual(t.reactions, [`${THREAD}/${MSG}/👀`]);
 
   t.tasks.update('devin-abc123', { stoppedBy: '1', active: false });
-  const stopped = await t.tool('post_to_task_thread', { session_id: 'devin-abc123', content: 'hi' });
+  const stopped = await t.tool('post_to_task_thread', { task_key: KEY, content: 'hi' });
   assert.equal(stopped.isError, true);
   assert.equal(t.sent.length, 2);
 });
@@ -186,7 +195,9 @@ test('MCP channel reads follow the allowed channels and mark content untrusted',
   assert.match(text, /‹\/untrusted_discord_context›/);
 
   assert.ok(!(await t.tool('read_channel', { channel_id: SUB_THREAD })).isError);
-  assert.ok(!(await t.tool('read_channel', { channel_id: THREAD })).isError, 'task threads are readable');
+  assert.equal((await t.tool('read_channel', { channel_id: THREAD })).isError, true, 'task threads follow their channel');
+  assert.equal((await t.tool('get_message', { channel_id: THREAD, message_id: MSG })).isError, true);
+  assert.equal((await t.tool('read_channel', { channel_id: PRIVATE_THREAD })).isError, true, 'private threads are never readable');
   const staff = await t.tool('read_channel', { channel_id: SECRET_CH });
   assert.equal(staff.isError, true);
   assert.equal((await t.tool('read_channel', { channel_id: OTHER_THREAD })).isError, true);
@@ -197,7 +208,7 @@ test('MCP channel reads follow the allowed channels and mark content untrusted',
   const list = (await t.tool('list_channels', {})).content[0].text;
   assert.match(list, /#general/);
   assert.doesNotMatch(list, /#staff/);
-  assert.deepEqual(t.reads, [GENERAL, SUB_THREAD, THREAD]);
+  assert.deepEqual(t.reads, [GENERAL, SUB_THREAD]);
 });
 
 test('MCP read channels override the Channels tab allowlist and fall back when empty', async () => {
@@ -210,7 +221,7 @@ test('MCP read channels override the Channels tab allowlist and fall back when e
   assert.equal(general.isError, true);
   assert.equal(general.content[0].text, "That channel isn't one of the channels this server lets Devin read through MCP.");
   assert.equal((await t.tool('read_channel', { channel_id: SUB_THREAD })).isError, true);
-  assert.ok(!(await t.tool('read_channel', { channel_id: THREAD })).isError, 'task threads are always readable');
+  assert.ok(!(await t.tool('read_channel', { channel_id: THREAD })).isError, 'threads under a listed channel are readable');
   assert.equal((await t.tool('get_message', { channel_id: GENERAL, message_id: MSG })).isError, true);
 
   const list = (await t.tool('list_channels', {})).content[0].text;
@@ -225,8 +236,25 @@ test('MCP read channels override the Channels tab allowlist and fall back when e
   assert.ok(!(await t.tool('read_channel', { channel_id: GENERAL })).isError, 'empty MCP list follows the Channels tab');
 });
 
+test('MCP reads with no list at all reach only channels everyone can see', async () => {
+  const t = setup();
+  t.guilds.setChannels(G, [], null);
+  assert.ok(!(await t.tool('read_channel', { channel_id: GENERAL })).isError);
+  assert.ok(!(await t.tool('read_channel', { channel_id: SUB_THREAD })).isError);
+  assert.equal((await t.tool('read_channel', { channel_id: SECRET_CH })).isError, true);
+  assert.equal((await t.tool('read_channel', { channel_id: THREAD })).isError, true);
+  assert.equal((await t.tool('read_channel', { channel_id: PRIVATE_THREAD })).isError, true);
+  assert.equal((await t.tool('get_message', { channel_id: SECRET_CH, message_id: MSG })).isError, true);
+  assert.deepEqual(t.reads, [GENERAL, SUB_THREAD]);
+
+  const list = (await t.tool('list_channels', {})).content[0].text;
+  assert.match(list, /You may read the channels everyone in the server can see/);
+  assert.match(list, /#general/);
+  assert.doesNotMatch(list, /#staff|400000000000000002/);
+});
+
 test('the other server\'s token sees only its own tasks', async () => {
   const t = setup();
-  const { body } = await t.rpc('tools/call', { name: 'read_task_thread', arguments: { session_id: 'devin-abc123' } }, {}, t.other.token);
+  const { body } = await t.rpc('tools/call', { name: 'read_task_thread', arguments: { task_key: KEY } }, {}, t.other.token);
   assert.equal(body.result.isError, true);
 });

@@ -119,7 +119,11 @@ export const MIGRATIONS: string[] = [
      primary key (guild_id, channel_id)
    );`,
 
-  // 7: a start reserves its row (pending = 1) before the Devin call, and one
+  // 7: per-task MCP key (hash only), so task-thread tools reach only the session they were handed to.
+  `alter table tasks add column mcp_key_hash text;
+   create unique index tasks_mcp_key_idx on tasks (mcp_key_hash);`,
+
+  // 8: a start reserves its row (pending = 1) before the Devin call, and one
   // message starts at most one task. Older duplicates keep only the newest link.
   `alter table tasks add column pending integer not null default 0;
    update tasks set source_message_id = null

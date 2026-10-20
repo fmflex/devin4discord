@@ -279,7 +279,7 @@ export class Bot {
     if (denied) return denied;
     const rows: TaskRow[] = [];
     for (const row of this.bridge.recent(guildId, LIST_SCAN)) {
-      if (await canView(row.threadId)) rows.push(row);
+      if (await canView(row.threadId).catch(() => false)) rows.push(row);
       if (rows.length === LIST_SIZE) break;
     }
     if (!rows.length) return { ok: true, reply: 'No tasks you can see yet.' };
@@ -350,6 +350,7 @@ export class Bot {
         channelId: settings?.taskChannelId ?? channel.id,
         instructions: settings?.instructions.trim() || DEFAULT_INSTRUCTIONS,
         maxAcu: limits.maxAcu,
+        mcpTools: this.guilds.mcpToken(guildId) !== null,
         reservation
       };
       let full: StartRequest;

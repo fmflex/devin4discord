@@ -1,6 +1,9 @@
+import { randomToken, sha256 } from './crypto.ts';
 import type { Attachment, DevinApi, Person } from './devin.ts';
 import {
+  MCP_TASK_KEY_PREFIX,
   chunkMessage,
+  mcpTaskKeyNote,
   forwardedMessagePrompt,
   isFinalState,
   mentionPrompt,
@@ -35,6 +38,8 @@ export type StartRequest = {
   maxAcu: number | null;
   /** A row from `TaskStore.reserve`, taken when the limits were checked. Reserved here when absent. */
   reservation?: string;
+  /** The server has an MCP token, so the session gets its own task key for the task-thread tools. */
+  mcpTools?: boolean;
 } & (
   | { kind: 'message'; message: ForwardedMessage & { id: string } }
   | { kind: 'prompt'; task: string; attachments: Attachment[] }
@@ -99,6 +104,8 @@ export class Bridge {
 
   async start(request: StartRequest): Promise<StartResult> {
     const forwarded = request.kind === 'prompt' ? null : request.message;
+    const mcpKey = request.mcpTools ? `${MCP_TASK_KEY_PREFIX}${randomToken(32)}` : null;
+    const instructions = mcpKey ? `${request.instructions}\n\n${mcpTaskKeyNote(mcpKey)}` : request.instructions;
     const key =
       request.reservation ??
       this.store.reserve({
@@ -128,7 +135,7 @@ export class Bridge {
       if (request.kind === 'message') {
         title = shortTitle(`${request.message.authorName}: ${request.message.content || 'attachment'}`);
         attachments = request.message.attachments;
-        prompt = forwardedMessagePrompt(request.message, request.opener, request.instructions);
+        prompt = forwardedMessagePrompt(request.message, request.opener, instructions);
       } else if (request.kind === 'mention') {
         title = shortTitle(request.text || request.context.repliedTo?.content || 'Discord request');
         attachments = [...request.message.attachments, ...(request.context.repliedTo?.attachments ?? [])];
@@ -136,12 +143,12 @@ export class Bridge {
           { text: request.text, link: request.message.link, attachments: request.message.attachments },
           request.context,
           request.opener,
-          request.instructions
+          instructions
         );
       } else {
         title = shortTitle(request.task);
         attachments = request.attachments;
-        prompt = taskPrompt(request.task, request.opener, request.instructions);
+        prompt = taskPrompt(request.task, request.opener, instructions);
       }
 
       session = await devin.startTask({
@@ -152,7 +159,12 @@ export class Bridge {
         guildId: request.guildId,
         maxAcu: request.maxAcu
       });
-      this.store.attachSession(key, { taskId: session.id, title, url: session.url });
+      this.store.attachSession(key, {
+        taskId: session.id,
+        title,
+        url: session.url,
+        mcpKeyHash: mcpKey ? sha256(mcpKey) : null
+      });
       rowId = session.id;
       if (request.kind === 'mention' && request.threadOnMessage) {
         threadId = await this.chat.createThreadOnMessage(request.channelId, request.message.id, `Devin: ${title}`);

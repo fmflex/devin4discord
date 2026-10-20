@@ -198,7 +198,8 @@ export function discordDirectory(client: Client): Directory {
       const guild = client.guilds.cache.get(guildId);
       if (!guild) return null;
       try {
-        return memberSnapshot(await guild.members.fetch(userId));
+        // Without the GuildMembers intent the cache never hears about role changes, kicks or bans.
+        return memberSnapshot(await guild.members.fetch({ user: userId, force: true }));
       } catch (error) {
         if (error instanceof DiscordAPIError && error.code === RESTJSONErrorCodes.UnknownMember) {
           return null;
@@ -409,7 +410,7 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore) {
     try {
       const message = reaction.message.partial ? await reaction.message.fetch() : reaction.message;
       if (!message.inGuild() || bot.isTaskThread(message.channelId)) return;
-      const member = await message.guild.members.fetch(user.id);
+      const member = await message.guild.members.fetch({ user: user.id, force: true });
       const outcome = await bot.startFromMessage(
         message.guildId,
         memberSnapshot(member),

@@ -1,4 +1,4 @@
-import type { Bridge, StartRequest } from './bridge.ts';
+import { TaskStartError, type Bridge, type StartRequest } from './bridge.ts';
 import type { Attachment, Person } from './devin.ts';
 import { DEFAULT_INSTRUCTIONS, type ForwardedMessage, type MentionContext } from './format.ts';
 import { DEFAULT_CONTEXT_MESSAGES, type GuildStore } from './guilds.ts';
@@ -15,7 +15,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const LIST_SIZE = 10;
 const LIST_SCAN = 50;
 
-export type ChannelRef = { id: string; parentId: string | null };
+/** `threads`: a task thread can be opened here (text, announcement or forum, or a thread in one). */
+export type ChannelRef = { id: string; parentId: string | null; threads: boolean };
 
 export type DenyReason =
   | 'unconfigured'
@@ -68,6 +69,10 @@ export function unconfiguredReply(publicUrl: string) {
 
 function person(member: MemberSnapshot): Person {
   return { discordId: member.id, name: member.name };
+}
+
+function alreadyStarted(threadId: string | null) {
+  return threadId ? `That message already has a task: <#${threadId}>` : 'A task for that message is already starting.';
 }
 
 function deny(reason: DenyReason, reply: string): Outcome {
@@ -304,11 +309,17 @@ export class Bot {
     ) {
       return deny('channel', "Devin isn't enabled in this channel.");
     }
-    if (request.kind !== 'prompt') {
-      const existing = this.tasks.bySourceMessage(request.message.id);
-      if (existing) {
-        return { ok: true, started: false, reply: `That message already has a task: <#${existing.threadId}>` };
-      }
+    const settings = this.guilds.settings(guildId);
+    if (!settings?.taskChannelId && !channel.threads) {
+      return deny(
+        'channel',
+        "Devin can't open a task thread here. Use a text, announcement or forum channel, or set a task channel."
+      );
+    }
+    const sourceMessageId = request.kind === 'prompt' ? null : request.message.id;
+    if (sourceMessageId) {
+      const existing = this.tasks.bySourceMessage(sourceMessageId);
+      if (existing) return { ok: true, started: false, reply: alreadyStarted(existing.pending ? null : existing.threadId) };
     }
     const limits = startLimits(member, this.guilds.roleRules(guildId));
     if (
@@ -326,43 +337,57 @@ export class Bot {
         `You already have ${limits.concurrentTasks} running tasks. Wait for one to finish.`
       );
     }
-    const settings = this.guilds.settings(guildId);
-    const common = {
-      guildId,
-      opener: person(member),
-      channelId: settings?.taskChannelId ?? channel.id,
-      instructions: settings?.instructions.trim() || DEFAULT_INSTRUCTIONS,
-      maxAcu: limits.maxAcu,
-      mcpTools: this.guilds.mcpToken(guildId) !== null
-    };
-    let full: StartRequest;
-    if (request.kind === 'mention') {
-      // Thread on the mention itself unless tasks go to a separate channel or it's already in a thread.
-      const threadOnMessage =
-        !channel.parentId && (!settings?.taskChannelId || settings.taskChannelId === channel.id);
-      const context = await request.loadContext(settings?.contextMessages ?? DEFAULT_CONTEXT_MESSAGES);
-      full = {
-        ...common,
-        channelId: threadOnMessage ? channel.id : common.channelId,
-        kind: 'mention',
-        message: request.message,
-        text: request.text,
-        context,
-        threadOnMessage
+    // Taken in the same synchronous step as the checks above, so concurrent
+    // triggers count each other before any of them reaches Devin.
+    const reservation = this.tasks.reserve({ guildId, openerId: member.id, sourceMessageId });
+    if (!reservation) return { ok: true, started: false, reply: alreadyStarted(null) };
+    const actor = { id: member.id, name: member.name };
+    let result;
+    try {
+      const common = {
+        guildId,
+        opener: person(member),
+        channelId: settings?.taskChannelId ?? channel.id,
+        instructions: settings?.instructions.trim() || DEFAULT_INSTRUCTIONS,
+        maxAcu: limits.maxAcu,
+        mcpTools: this.guilds.mcpToken(guildId) !== null,
+        reservation
       };
-    } else {
-      full = { ...common, ...request };
+      let full: StartRequest;
+      if (request.kind === 'mention') {
+        // Thread on the mention itself unless tasks go to a separate channel or it's already in a thread.
+        const threadOnMessage =
+          !channel.parentId && (!settings?.taskChannelId || settings.taskChannelId === channel.id);
+        const context = await request.loadContext(settings?.contextMessages ?? DEFAULT_CONTEXT_MESSAGES);
+        full = {
+          ...common,
+          channelId: threadOnMessage ? channel.id : common.channelId,
+          kind: 'mention',
+          message: request.message,
+          text: request.text,
+          context,
+          threadOnMessage
+        };
+      } else {
+        full = { ...common, ...request };
+      }
+      result = await this.bridge.start(full);
+    } catch (error) {
+      this.tasks.release(reservation);
+      if (error instanceof TaskStartError && error.url) {
+        this.guilds.audit(guildId, actor, 'task.start_failed', `${error.url} ${error.message}`);
+      }
+      throw error;
     }
-    const result = await this.bridge.start(full);
     this.guilds.audit(
       guildId,
-      { id: member.id, name: member.name },
+      actor,
       'task.start',
       result.started ? `<#${result.threadId}> ${result.url}` : `<#${result.threadId}>`
     );
     return result.started
       ? { ok: true, started: true, reply: `Devin task started: <#${result.threadId}>` }
-      : { ok: true, started: false, reply: `That message already has a task: <#${result.threadId}>` };
+      : { ok: true, started: false, reply: alreadyStarted(result.threadId) };
   }
 
   /** Null when the server is set up and the member holds any of `permissions`. */

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Bridge, type ChatPort } from '../src/bridge.ts';
+import { Bridge, TaskStartError, type ChatPort } from '../src/bridge.ts';
 import { openDatabase } from '../src/db.ts';
 import type { DevinApi, StartTaskInput, TaskUpdate } from '../src/devin.ts';
 import { TaskStore } from '../src/store.ts';
@@ -17,9 +17,11 @@ function setup() {
   const controls: string[] = [];
   const updates = new Map<string, TaskUpdate | Error>();
   let nextTask = 1;
+  const failures: { thread?: Error; terminate?: Error } = {};
 
   const chat: ChatPort = {
     async createTaskThread(channelId, title, intro) {
+      if (failures.thread) throw failures.thread;
       threads.push({ channelId, title, intro });
       return `thread-${threads.length}`;
     },
@@ -44,6 +46,7 @@ function setup() {
       forwarded.push({ taskId, text: input.text });
     },
     async terminate(taskId) {
+      if (failures.terminate) throw failures.terminate;
       controls.push(`terminate ${taskId}`);
     },
     async sleep(taskId) {
@@ -61,7 +64,7 @@ function setup() {
   };
   const store = new TaskStore(openDatabase(':memory:'));
   const bridge = new Bridge({ devin: (guildId) => (guildId === 'g1' ? devin : null), store, chat, ignorePrefix: '//' });
-  return { bridge, store, sent, members, threads, threadsOnMessage, started, forwarded, updates, controls };
+  return { bridge, store, sent, members, threads, threadsOnMessage, started, forwarded, updates, controls, failures };
 }
 
 const opener = { discordId: '10', name: 'Admin' };
@@ -257,4 +260,32 @@ test('after sleep the next reply wakes Devin and unarchives the session', async 
   assert.equal(t.store.byThread('thread-1')?.sleptBy, null);
   await t.bridge.forward('thread-1', opener, 'again', []);
   assert.deepEqual(t.controls, ['sleep task-1', 'unarchive task-1']);
+});
+
+test('a session whose thread fails stays counted until it is terminated, at the latest on restart', async () => {
+  const t = setup();
+  t.failures.thread = new Error('Missing Access');
+  t.failures.terminate = new Error('Devin is down');
+  await assert.rejects(
+    t.bridge.start({ kind: 'message', ...base, channelId: 'chan', message }),
+    (error: unknown) => error instanceof TaskStartError && error.url === 'https://agent.test/task-1'
+  );
+  assert.deepEqual(t.controls, []);
+  assert.equal(t.store.countActive('g1', '10'), 1, 'the running session still counts');
+  assert.equal(t.store.byId('task-1'), null, 'but is not a visible task');
+  assert.equal((await t.bridge.start({ kind: 'message', ...base, channelId: 'chan', message })).started, false);
+  assert.equal(t.started.length, 1);
+
+  await t.bridge.recoverPending();
+  assert.equal(t.store.pendingRows().length, 1, 'kept while terminating still fails');
+  delete t.failures.terminate;
+  await t.bridge.recoverPending();
+  assert.deepEqual(t.controls, ['terminate task-1']);
+  assert.deepEqual(t.store.pendingRows(), []);
+  assert.equal(t.store.countActive('g1', '10'), 0);
+
+  t.store.reserve({ guildId: 'g1', openerId: '10', sourceMessageId: 'msg-2' });
+  await t.bridge.recoverPending();
+  assert.deepEqual(t.controls, ['terminate task-1'], 'a reservation without a session is just dropped');
+  assert.deepEqual(t.store.pendingRows(), []);
 });

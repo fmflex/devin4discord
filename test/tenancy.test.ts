@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { PermissionsBitField } from 'discord.js';
-import { Bot, unconfiguredReply } from '../src/bot.ts';
+import { Bot, unconfiguredReply, type ChannelRef } from '../src/bot.ts';
 import { Bridge, type ChatPort } from '../src/bridge.ts';
 import { Secrets, sha256 } from '../src/crypto.ts';
 import { discordDirectory } from '../src/discord.ts';
@@ -175,11 +175,14 @@ function botSetup() {
     }
   };
   let threads = 0;
+  let threadFailure: Error | null = null;
   const chat: ChatPort = {
     async createTaskThread() {
+      if (threadFailure) throw threadFailure;
       return `thread-${++threads}`;
     },
     async createThreadOnMessage(channelId, messageId, title) {
+      if (threadFailure) throw threadFailure;
       threadsOnMessage.push({ channelId, messageId, title });
       return `thread-on-${messageId}`;
     },
@@ -211,11 +214,12 @@ function botSetup() {
     sent,
     threadsOnMessage,
     configure,
-    advance: (ms: number) => (now += ms)
+    advance: (ms: number) => (now += ms),
+    failThreads: (error: Error | null) => (threadFailure = error)
   };
 }
 
-const channel = { id: 'c1', parentId: null };
+const channel = { id: 'c1', parentId: null, threads: true };
 const message = { id: 'm1', authorName: 'Player', authorId: '99', link: 'https://discord.com/x', content: 'Bug', attachments: [] };
 
 test('every trigger in an unconfigured server gets the setup link', async () => {
@@ -262,7 +266,7 @@ test('triggers are gated by role permissions, channels and limits', async () => 
   t.guilds.setChannels(G, ['c2'], null);
   const wrongChannel = await t.bot.startFromPrompt(G, mod, channel, 'x', []);
   assert.equal(wrongChannel.ok === false && wrongChannel.reason, 'channel');
-  assert.equal((await t.bot.startFromPrompt(G, mod, { id: 'thread-x', parentId: 'c2' }, 'x', [])).ok, true);
+  assert.equal((await t.bot.startFromPrompt(G, mod, { id: 'thread-x', parentId: 'c2', threads: true }, 'x', [])).ok, true);
 });
 
 test('/devin list only shows tasks in threads the member can see', async () => {
@@ -270,7 +274,7 @@ test('/devin list only shows tasks in threads the member can see', async () => {
   t.configure();
   const mod = member({ id: '3', roleIds: [G, MOD] });
   const helper = member({ id: '2', roleIds: [G, HELPER] });
-  await t.bot.startFromPrompt(G, mod, { id: 'staff', parentId: null }, 'secret', []);
+  await t.bot.startFromPrompt(G, mod, { id: 'staff', parentId: null, threads: true }, 'secret', []);
   t.tasks.update('task-1', { pullRequests: ['https://github.com/acme/private/pull/7'], stateLabel: 'working' });
   await t.bot.startFromPrompt(G, helper, channel, 'public', []);
   const visible = new Set(['thread-2']);
@@ -315,7 +319,7 @@ function incoming(
   t: ReturnType<typeof botSetup>,
   who: MemberSnapshot,
   content: string,
-  overrides: { channel?: { id: string; parentId: string | null }; id?: string; isReply?: boolean } = {}
+  overrides: { channel?: ChannelRef; id?: string; isReply?: boolean } = {}
 ) {
   const limits: number[] = [];
   const outcome = t.bot.handleMessage({
@@ -349,7 +353,7 @@ test('an @mention starts a task with the mention stripped and channel context', 
 
   t.guilds.setMentionSettings(G, 3, false);
   t.tasks.update('task-1', { active: false });
-  const second = incoming(t, helper, `<@${BOT}> again`, { channel: { id: 't9', parentId: 'c1' } });
+  const second = incoming(t, helper, `<@${BOT}> again`, { channel: { id: 't9', parentId: 'c1', threads: true } });
   assert.equal((await second.outcome).action, 'started');
   assert.deepEqual(second.limits, [3]);
   assert.equal(t.threadsOnMessage.length, 1, 'a mention inside a thread opens a new task thread instead');
@@ -403,7 +407,7 @@ test('a mention inside a task thread is a reply, not a new task', async () => {
   t.configure();
   seedTask(t, 'task-a', 'thread-a', G, '2');
   const helper = member({ id: '2', roleIds: [G, HELPER] });
-  const inThread = { id: 'thread-a', parentId: 'c1' };
+  const inThread = { id: 'thread-a', parentId: 'c1', threads: true };
   const result = await incoming(t, helper, `<@${BOT}> also check the footer`, { channel: inThread }).outcome;
   assert.deepEqual(result, { action: 'forwarded' });
   assert.deepEqual(t.forwarded, ['also check the footer']);
@@ -419,7 +423,7 @@ test('"Only forward messages that @mention Devin" skips plain thread messages', 
   t.guilds.setMentionSettings(G, 10, true);
   seedTask(t, 'task-a', 'thread-a', G, '2');
   const helper = member({ id: '2', roleIds: [G, HELPER] });
-  const inThread = { id: 'thread-a', parentId: 'c1' };
+  const inThread = { id: 'thread-a', parentId: 'c1', threads: true };
   assert.deepEqual(await incoming(t, helper, 'chatter', { channel: inThread }).outcome, { action: 'ignored' });
   assert.deepEqual(await incoming(t, helper, `<@${BOT}> real feedback`, { channel: inThread }).outcome, { action: 'forwarded' });
   assert.deepEqual(t.forwarded, ['real feedback']);
@@ -440,7 +444,7 @@ test('stop and sleep: the opener, manage_tasks and Administrators only', async (
       t.configure();
       seedTask(t, 'task-a', 'thread-a');
       const viaSlash = await t.bot.controlThread(action, G, who, 'thread-a');
-      const viaMention = await incoming(t, who, `<@${BOT}> ${action}`, { channel: { id: 'thread-a', parentId: 'c1' } }).outcome;
+      const viaMention = await incoming(t, who, `<@${BOT}> ${action}`, { channel: { id: 'thread-a', parentId: 'c1', threads: true } }).outcome;
       if (allowed.has(name)) {
         assert.equal(viaSlash.ok, true, `${name} ${action}`);
         assert.deepEqual(t.controls, [`${action === 'stop' ? 'terminate' : 'sleep'} task-a`]);
@@ -523,6 +527,86 @@ test('the setup UI asks Discord for the member instead of trusting the cache', a
   const member = await discordDirectory(client as never).member(guild.id, '42');
   assert.deepEqual(calls, [{ user: '42', force: true }]);
   assert.deepEqual(member, { id: '42', name: 'Ex-mod', roleIds: [guild.id], isAdmin: false, canManageGuild: false });
+});
+
+test('concurrent starts reserve their slot first, so limits and one-task-per-message hold', async () => {
+  const t = botSetup();
+  t.configure();
+  const helper = member({ id: '2', roleIds: [G, HELPER] });
+  const burst = await Promise.all(
+    Array.from({ length: 5 }, (_, i) => t.bot.startFromPrompt(G, helper, channel, `task ${i}`, []))
+  );
+  assert.equal(burst.filter((o) => o.ok && o.started).length, 1);
+  assert.equal(burst.filter((o) => !o.ok && o.reason === 'limit').length, 4);
+  assert.equal(t.started.length, 1);
+
+  const mod = member({ id: '3', roleIds: [G, MOD] });
+  const same = { ...message, id: 'm-dup' };
+  const dup = await Promise.all([
+    t.bot.startFromMessage(G, mod, channel, same),
+    t.bot.startFromMessage(G, mod, channel, same),
+    incoming(t, mod, `<@${BOT}> do it`, { id: 'm-dup' }).outcome
+  ]);
+  assert.equal(t.started.length, 2, 'one more session for the message, not three');
+  assert.deepEqual(dup[1], { ok: true, started: false, reply: 'A task for that message is already starting.' });
+  assert.equal(t.tasks.bySourceMessage('m-dup')?.pending, false);
+});
+
+test('channels that cannot hold a task thread are refused before Devin is called', async () => {
+  const t = botSetup();
+  t.configure();
+  const mod = member({ id: '3', roleIds: [G, MOD] });
+  const voice = { id: 'voice-1', parentId: null, threads: false };
+  const refused = [
+    await t.bot.startFromPrompt(G, mod, voice, 'x', []),
+    await t.bot.startFromMessage(G, mod, voice, { ...message, id: 'm-voice' })
+  ];
+  for (const outcome of refused) assert.equal(outcome.ok === false && outcome.reason, 'channel');
+  const viaMention = await incoming(t, mod, `<@${BOT}> fix`, { channel: voice }).outcome;
+  assert.equal(viaMention.action === 'denied' && viaMention.reason, 'channel');
+  assert.equal(t.started.length, 0);
+  assert.equal(t.tasks.countActive(G, mod.id), 0);
+
+  t.guilds.setChannels(G, [], 'c2');
+  assert.equal((await t.bot.startFromPrompt(G, mod, voice, 'x', [])).ok, true, 'a task channel takes the thread');
+});
+
+test('a thread that fails to open terminates the session, frees the slot and is audited', async () => {
+  const t = botSetup();
+  t.configure();
+  const helper = member({ id: '2', roleIds: [G, HELPER] });
+  t.failThreads(new Error('Task threads need a text or announcement channel.'));
+  await assert.rejects(
+    t.bot.startFromMessage(G, helper, channel, { ...message, id: 'm-gone' }),
+    /announcement channel\. The Devin session was stopped\./
+  );
+  assert.deepEqual(t.controls, ['terminate task-1']);
+  assert.equal(t.tasks.countActive(G, helper.id), 0);
+  assert.equal(t.tasks.countStartedSince(G, helper.id, 0), 0);
+  assert.equal(t.tasks.bySourceMessage('m-gone'), null);
+  const [entry] = t.guilds.auditLog(G);
+  assert.equal(entry.action, 'task.start_failed');
+  assert.match(entry.detail, /https:\/\/devin\.test\/task-1/);
+
+  t.failThreads(null);
+  const retry = await t.bot.startFromMessage(G, helper, channel, { ...message, id: 'm-gone' });
+  assert.equal(retry.ok && retry.started, true);
+});
+
+test('migration 8 keeps one task per source message', () => {
+  const db = new DatabaseSync(':memory:');
+  for (const sql of MIGRATIONS.slice(0, 7)) db.exec(sql);
+  db.exec('pragma user_version = 7');
+  const insert = db.prepare(
+    `insert into tasks (task_id, agent, guild_id, thread_id, source_message_id, opener_id, title, url, created_at, updated_at)
+     values (?, 'devin', 'g', ?, 'm1', '10', 't', 'u', 1, 1)`
+  );
+  insert.run('devin-1', 'thread-1');
+  insert.run('devin-2', 'thread-2');
+  migrate(db);
+  const tasks = new TaskStore(db);
+  assert.equal(tasks.bySourceMessage('m1')?.taskId, 'devin-2');
+  assert.equal(tasks.reserve({ guildId: 'g', openerId: '10', sourceMessageId: 'm1' }), null);
 });
 
 test('/devin list hides a task when the visibility check fails', async () => {

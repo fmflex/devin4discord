@@ -13,7 +13,7 @@ import {
   type ForwardedMessage,
   type MentionContext
 } from './format.ts';
-import type { TaskRow, TaskStore } from './store.ts';
+import { TaskStore, type TaskRow } from './store.ts';
 import { controlId } from './triggers.ts';
 
 export type ChatButton = { customId: string; label: string; style: 'danger' | 'secondary' };
@@ -36,6 +36,8 @@ export type StartRequest = {
   channelId: string;
   instructions: string;
   maxAcu: number | null;
+  /** A row from `TaskStore.reserve`, taken when the limits were checked. Reserved here when absent. */
+  reservation?: string;
   /** The server has an MCP token, so the session gets its own task key for the task-thread tools. */
   mcpTools?: boolean;
 } & (
@@ -61,7 +63,20 @@ export function controlButtons(taskId: string): ChatButton[] {
 
 export type StartResult =
   | { started: true; threadId: string; url: string }
-  | { started: false; threadId: string };
+  /** `threadId` is null while the other start is still opening its thread. */
+  | { started: false; threadId: string | null };
+
+/** A start that failed; `url` is set when a Devin session was created and then terminated. */
+export class TaskStartError extends Error {
+  readonly url: string | null;
+
+  constructor(cause: unknown, url: string | null) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    super(url ? `${reason} The Devin session was stopped.` : reason, { cause });
+    this.name = 'TaskStartError';
+    this.url = url;
+  }
+}
 
 const SLEEP_LABEL = 'asleep (a reply wakes it)';
 
@@ -88,64 +103,94 @@ export class Bridge {
   }
 
   async start(request: StartRequest): Promise<StartResult> {
-    if (request.kind !== 'prompt') {
-      const existing = this.store.bySourceMessage(request.message.id);
-      if (existing) return { started: false, threadId: existing.threadId };
-    }
-    const devin = this.devin(request.guildId);
-    if (!devin) throw new Error('Devin is not set up in this server.');
     const forwarded = request.kind === 'prompt' ? null : request.message;
     const mcpKey = request.mcpTools ? `${MCP_TASK_KEY_PREFIX}${randomToken(32)}` : null;
     const instructions = mcpKey ? `${request.instructions}\n\n${mcpTaskKeyNote(mcpKey)}` : request.instructions;
+    const key =
+      request.reservation ??
+      this.store.reserve({
+        guildId: request.guildId,
+        openerId: request.opener.discordId,
+        sourceMessageId: forwarded?.id ?? null
+      });
+    if (!key) {
+      const existing = forwarded ? this.store.bySourceMessage(forwarded.id) : null;
+      return { started: false, threadId: existing && !existing.pending ? existing.threadId : null };
+    }
+    // A failure before the thread exists ends the session and frees the reservation.
+    let rowId = key;
+    let session: { id: string; url: string } | null = null;
+    let devin: DevinApi | null = null;
     let title: string;
-    let attachments: Attachment[];
-    let prompt: string;
-    if (request.kind === 'message') {
-      title = shortTitle(`${request.message.authorName}: ${request.message.content || 'attachment'}`);
-      attachments = request.message.attachments;
-      prompt = forwardedMessagePrompt(request.message, request.opener, instructions);
-    } else if (request.kind === 'mention') {
-      title = shortTitle(request.text || request.context.repliedTo?.content || 'Discord request');
-      attachments = [...request.message.attachments, ...(request.context.repliedTo?.attachments ?? [])];
-      prompt = mentionPrompt(
-        { text: request.text, link: request.message.link, attachments: request.message.attachments },
-        request.context,
-        request.opener,
-        instructions
-      );
-    } else {
-      title = shortTitle(request.task);
-      attachments = request.attachments;
-      prompt = taskPrompt(request.task, request.opener, instructions);
-    }
-
-    const task = await devin.startTask({
-      prompt,
-      title,
-      attachments,
-      requestedBy: request.opener,
-      guildId: request.guildId,
-      maxAcu: request.maxAcu
-    });
-    const source = forwarded ? ` from ${forwarded.link}` : '';
-    const intro = `**${title}**\nStarted by <@${request.opener.discordId}>${source}\n${task.url}`;
     let threadId: string;
-    if (request.kind === 'mention' && request.threadOnMessage) {
-      threadId = await this.chat.createThreadOnMessage(request.channelId, request.message.id, `Devin: ${title}`);
-      await this.post(threadId, intro);
-    } else {
-      threadId = await this.chat.createTaskThread(request.channelId, `Devin: ${title}`, intro);
+    const intro = (url: string) => {
+      const source = forwarded ? ` from ${forwarded.link}` : '';
+      return `**${title}**\nStarted by <@${request.opener.discordId}>${source}\n${url}`;
+    };
+    try {
+      devin = this.devin(request.guildId);
+      if (!devin) throw new Error('Devin is not set up in this server.');
+      let attachments: Attachment[];
+      let prompt: string;
+      if (request.kind === 'message') {
+        title = shortTitle(`${request.message.authorName}: ${request.message.content || 'attachment'}`);
+        attachments = request.message.attachments;
+        prompt = forwardedMessagePrompt(request.message, request.opener, instructions);
+      } else if (request.kind === 'mention') {
+        title = shortTitle(request.text || request.context.repliedTo?.content || 'Discord request');
+        attachments = [...request.message.attachments, ...(request.context.repliedTo?.attachments ?? [])];
+        prompt = mentionPrompt(
+          { text: request.text, link: request.message.link, attachments: request.message.attachments },
+          request.context,
+          request.opener,
+          instructions
+        );
+      } else {
+        title = shortTitle(request.task);
+        attachments = request.attachments;
+        prompt = taskPrompt(request.task, request.opener, instructions);
+      }
+
+      session = await devin.startTask({
+        prompt,
+        title,
+        attachments,
+        requestedBy: request.opener,
+        guildId: request.guildId,
+        maxAcu: request.maxAcu
+      });
+      this.store.attachSession(key, {
+        taskId: session.id,
+        title,
+        url: session.url,
+        mcpKeyHash: mcpKey ? sha256(mcpKey) : null
+      });
+      rowId = session.id;
+      if (request.kind === 'mention' && request.threadOnMessage) {
+        threadId = await this.chat.createThreadOnMessage(request.channelId, request.message.id, `Devin: ${title}`);
+      } else {
+        threadId = await this.chat.createTaskThread(request.channelId, `Devin: ${title}`, intro(session.url));
+      }
+      this.store.complete(session.id, threadId);
+    } catch (error) {
+      // If terminating fails the reservation stays: it keeps counting toward the
+      // opener's limits and `recoverPending` retries on the next start-up.
+      if (!session || !devin) this.store.release(rowId);
+      else {
+        const id = session.id;
+        await devin.terminate(id).then(
+          () => this.store.release(id),
+          (stopError) => console.error(`Terminating task ${id} after a failed start failed:`, stopError)
+        );
+      }
+      throw new TaskStartError(error, session?.url ?? null);
     }
-    this.store.insert({
-      taskId: task.id,
-      guildId: request.guildId,
-      threadId,
-      sourceMessageId: forwarded?.id ?? null,
-      openerId: request.opener.discordId,
-      title,
-      url: task.url,
-      mcpKeyHash: mcpKey ? sha256(mcpKey) : null
-    });
+    const task = session;
+    if (request.kind === 'mention' && request.threadOnMessage) {
+      await this.post(threadId, intro(task.url)).catch((error) => {
+        console.error(`Posting the intro in thread ${threadId} failed:`, error);
+      });
+    }
     await this.chat.addThreadMember(threadId, request.opener.discordId).catch((error) => {
       console.error(`Adding ${request.opener.discordId} to thread ${threadId} failed:`, error);
     });
@@ -157,8 +202,29 @@ export class Bridge {
       `Devin is on it. Reply in this thread to give it feedback, images included.${aside}`,
       undefined,
       controlButtons(task.id)
-    );
+    ).catch((error) => {
+      console.error(`Posting the controls in thread ${threadId} failed:`, error);
+    });
     return { started: true, threadId, url: task.url };
+  }
+
+  /**
+   * Starts cut short by a restart: their sessions have no thread and can't be
+   * stopped from Discord, so end them and free the reservations.
+   */
+  async recoverPending() {
+    for (const row of this.store.pendingRows()) {
+      const devin = row.guildId ? this.devin(row.guildId) : null;
+      if (devin && !TaskStore.isProvisional(row.taskId)) {
+        try {
+          await devin.terminate(row.taskId);
+        } catch (error) {
+          console.error(`Terminating unfinished task ${row.taskId} failed:`, error);
+          continue;
+        }
+      }
+      this.store.release(row.taskId);
+    }
   }
 
   task(threadId: string) {

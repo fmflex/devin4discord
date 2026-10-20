@@ -83,6 +83,8 @@ try {
   process.exit(1);
 }
 
+await bridge.recoverPending();
+
 while (!stopping) {
   await sleep(config.pollIntervalMs);
   if (client.isReady()) await bridge.syncAll();

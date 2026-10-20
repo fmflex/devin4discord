@@ -179,6 +179,13 @@ export function memberSnapshot(member: GuildMember): MemberSnapshot {
   };
 }
 
+/** Channel types the bridge can open a task thread in (see `discordChat`). */
+const THREAD_HOMES: ReadonlySet<ChannelType> = new Set([
+  ChannelType.GuildText,
+  ChannelType.GuildAnnouncement,
+  ChannelType.GuildForum
+]);
+
 function everyoneCanView(channel: GuildBasedChannel) {
   return channel.permissionsFor(channel.guild.roles.everyone)?.has(PermissionFlagsBits.ViewChannel) ?? false;
 }
@@ -196,8 +203,11 @@ export async function canSeeThread(member: GuildMember, threadId: string): Promi
 }
 
 function channelRef(channel: Channel | null, fallbackId: string): ChannelRef {
-  if (channel?.isThread()) return { id: channel.id, parentId: channel.parentId };
-  return { id: channel?.id ?? fallbackId, parentId: null };
+  if (channel?.isThread()) {
+    const parent = channel.parent;
+    return { id: channel.id, parentId: channel.parentId, threads: !!parent && THREAD_HOMES.has(parent.type) };
+  }
+  return { id: channel?.id ?? fallbackId, parentId: null, threads: !!channel && THREAD_HOMES.has(channel.type) };
 }
 
 const CHANNEL_KINDS: Partial<Record<ChannelType, ChannelInfo['kind']>> = {
@@ -411,7 +421,10 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore) {
       return bot.startFromPrompt(
         interaction.guildId,
         member,
-        channelRef(interaction.channel, interaction.channelId),
+        channelRef(
+          interaction.channel ?? (await client.channels.fetch(interaction.channelId).catch(() => null)),
+          interaction.channelId
+        ),
         interaction.options.getString('task', true),
         file ? attachments([file]) : []
       );

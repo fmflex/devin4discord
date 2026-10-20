@@ -151,7 +151,8 @@ export function devinPage(
   session: WebSession,
   guild: { id: string; name: string },
   form: DevinForm,
-  notice: PageOptions['notice']
+  notice: PageOptions['notice'],
+  canEditUserMap: boolean
 ) {
   return layout({
     title: `${guild.name} · Devin`,
@@ -163,7 +164,7 @@ export function devinPage(
       <h2>Devin connection</h2>
       <p class="muted">Use a service user key (Devin → Settings → Devin API → Service users) with permission to create, view and message sessions. Tasks are created by this service user.</p>
       <label>API key ${help('the API key', html`<p>A Devin <strong>service user</strong> key, starting with <code>cog_</code>. In Devin, open <strong>Settings → Devin API → Service users</strong>, create one and copy the key. Devin shows it only once.</p>
-        <p>Give its role <code>UseDevinSessions</code>, <code>ViewOrgSessions</code> and <code>ManageOrgSessions</code>, plus <code>ImpersonateOrgSessions</code> if you use "Run as Devin users".</p>
+        <p>Give its role <code>UseDevinSessions</code>, <code>ViewOrgSessions</code> and <code>ManageOrgSessions</code>, plus <code>ImpersonateOrgSessions</code> and <code>ViewOrgMembership</code> if you use "Run as Devin users".</p>
         <p>It's checked with read-only calls before saving and stored encrypted.</p>
         <p>${doc(DOCS.serviceUsers, 'Devin docs: service users')} · ${doc(DOCS.permissions, 'API permissions')}</p>`)}
         <input type="password" name="api_key" autocomplete="off" spellcheck="false"
@@ -183,10 +184,12 @@ export function devinPage(
       <label>Run as Devin users <span class="muted">(optional, one per line: Discord user ID, space, Devin user ID)</span> ${help('running as Devin users', html`<p>By default every task is created by the service user. List a Discord member here with their Devin user ID (<code>user-…</code>), and tasks they start and replies they send are made as that Devin user.</p>
         <p>Example: <code>123456789012345678 user-0123abcd…</code></p>
         <p>To copy a Discord user ID, turn on Developer Mode in Discord (User Settings → Advanced), then right-click the member → Copy User ID.</p>
-        <p>Needs <code>ImpersonateOrgSessions</code> on the service user. The Devin user must be in the organization and allowed to use Devin.</p>
+        <p>Only Discord Administrators can change this list. Each Devin user is checked to be in the organization before saving, and every change is written to the audit log.</p>
+        <p>Needs <code>ImpersonateOrgSessions</code> and <code>ViewOrgMembership</code> on the service user. The Devin user must be in the organization and allowed to use Devin.</p>
         <p>${doc(DOCS.discordIds, 'Discord: finding IDs')} · ${doc(DOCS.createSession, 'Devin docs: create_as_user_id')}</p>`)}
-        <textarea name="user_map" rows="3" spellcheck="false">${form.userMap}</textarea>
+        <textarea name="user_map" rows="3" spellcheck="false"${canEditUserMap ? '' : ' readonly'}>${form.userMap}</textarea>
       </label>
+      ${canEditUserMap ? '' : html`<p class="muted small">Only Discord Administrators can change who runs as which Devin user.</p>`}
       <label>Extra instructions <span class="muted">(added to every task; a default is used when empty)</span> ${help('extra instructions', html`<p>Added to the prompt of every task from this server, for example your conventions or "open PRs as drafts".</p>
         <p>When empty, this default is used: <em>${DEFAULT_INSTRUCTIONS}</em></p>`)}
         <textarea name="instructions" rows="3">${form.instructions}</textarea>

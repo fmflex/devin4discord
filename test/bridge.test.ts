@@ -216,7 +216,7 @@ test('a mention opens the thread on the message and posts Stop / Sleep buttons',
   assert.deepEqual(t.threadsOnMessage, [{ channelId: 'chan', messageId: 'msg-1', title: 'Devin: the button does nothing' }]);
   assert.equal(t.threads.length, 0);
   assert.match(t.started[0].prompt, /Admin asked you on Discord.*\n\nthe button does nothing/);
-  assert.match(t.started[0].prompt, /<untrusted_discord_context>[\s\S]*Bob[\s\S]*see this/);
+  assert.match(t.started[0].prompt, /<untrusted_discord_context_\w+>[\s\S]*Bob[\s\S]*see this/);
   assert.deepEqual(t.started[0].attachments.map((file) => file.filename), ['shot.png', 'b.png']);
   assert.match(t.sent[0].content, /Started by <@10>/);
   assert.deepEqual(t.sent.at(-1)?.buttons, ['devin:stop:task-1', 'devin:sleep:task-1']);

@@ -12,6 +12,8 @@ import type { TaskRow, TaskStore } from './store.ts';
 import { parseControlId, parseMention, type ControlAction } from './triggers.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const LIST_SIZE = 10;
+const LIST_SCAN = 50;
 
 /** `threads`: a task thread can be opened here (text, announcement or forum, or a thread in one). */
 export type ChannelRef = { id: string; parentId: string | null; threads: boolean };
@@ -267,11 +269,20 @@ export class Bot {
     };
   }
 
-  list(guildId: string, member: MemberSnapshot): Outcome {
+  /** Recent tasks, limited to those whose thread `canView` says the member can see in Discord. */
+  async list(
+    guildId: string,
+    member: MemberSnapshot,
+    canView: (threadId: string) => Promise<boolean>
+  ): Promise<Outcome> {
     const denied = this.check(guildId, member, ['start_tasks', 'reply', 'manage_tasks']);
     if (denied) return denied;
-    const rows = this.bridge.recent(guildId, 10);
-    if (!rows.length) return { ok: true, reply: 'No tasks yet.' };
+    const rows: TaskRow[] = [];
+    for (const row of this.bridge.recent(guildId, LIST_SCAN)) {
+      if (await canView(row.threadId)) rows.push(row);
+      if (rows.length === LIST_SIZE) break;
+    }
+    if (!rows.length) return { ok: true, reply: 'No tasks you can see yet.' };
     const reply = rows
       .map((row) => {
         const prs = row.pullRequests.length ? ` · ${row.pullRequests.join(' ')}` : '';

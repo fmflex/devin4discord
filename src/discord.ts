@@ -154,7 +154,7 @@ export function commandDefinitions() {
     .addSubcommand((sub) =>
       sub.setName('status').setDescription("Status and PRs of this thread's task")
     )
-    .addSubcommand((sub) => sub.setName('list').setDescription('Recent tasks in this server'))
+    .addSubcommand((sub) => sub.setName('list').setDescription('Recent tasks in threads you can see'))
     .addSubcommand((sub) => sub.setName('stop').setDescription("Stop this thread's task for good"))
     .addSubcommand((sub) =>
       sub.setName('sleep').setDescription("Put this thread's task to sleep; a reply wakes it")
@@ -184,6 +184,18 @@ const THREAD_HOMES: ReadonlySet<ChannelType> = new Set([
   ChannelType.GuildAnnouncement,
   ChannelType.GuildForum
 ]);
+
+/** Whether Discord lets `member` view the thread: the parent's View Channel, plus membership for private threads. */
+export async function canSeeThread(member: GuildMember, threadId: string): Promise<boolean> {
+  const channel =
+    member.guild.channels.cache.get(threadId) ??
+    (await member.guild.channels.fetch(threadId).catch(() => null));
+  if (!channel) return false;
+  const perms = channel.permissionsFor(member);
+  if (!perms?.has(PermissionFlagsBits.ViewChannel)) return false;
+  if (channel.type !== ChannelType.PrivateThread || perms.has(PermissionFlagsBits.ManageThreads)) return true;
+  return Boolean(await channel.members.fetch({ member: member.id }).catch(() => null));
+}
 
 function channelRef(channel: Channel | null, fallbackId: string): ChannelRef {
   if (channel?.isThread()) {
@@ -415,7 +427,9 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore) {
     if (sub === 'stop' || sub === 'sleep') {
       return bot.controlThread(sub, interaction.guildId, member, interaction.channelId);
     }
-    return bot.list(interaction.guildId, member);
+    return bot.list(interaction.guildId, member, (threadId) =>
+      canSeeThread(interaction.member, threadId)
+    );
   }
 
   client.on(Events.MessageReactionAdd, async (reaction, user) => {

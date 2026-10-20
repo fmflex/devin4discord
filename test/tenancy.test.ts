@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
+import { PermissionsBitField } from 'discord.js';
 import { Bot, unconfiguredReply } from '../src/bot.ts';
 import { Bridge, type ChatPort } from '../src/bridge.ts';
 import { Secrets } from '../src/crypto.ts';
+import { discordDirectory } from '../src/discord.ts';
 import { MIGRATIONS, SCHEMA_VERSION, migrate, openDatabase } from '../src/db.ts';
 import type { DevinApi, StartTaskInput } from '../src/devin.ts';
 import { GuildStore } from '../src/guilds.ts';
@@ -469,4 +471,27 @@ test('a stopped task takes no more replies', async () => {
   const reply = await t.bot.reply(G, member({ id: '3', roleIds: [G, MOD] }), 'thread-a', 'more', []);
   assert.equal(reply.ok === false && reply.reason, 'ended');
   assert.deepEqual(t.forwarded, []);
+});
+
+test('the setup UI asks Discord for the member instead of trusting the cache', async () => {
+  const calls: unknown[] = [];
+  const guild = {
+    id: '900000000000000001',
+    members: {
+      fetch: async (options: unknown) => {
+        calls.push(options);
+        return {
+          id: '42',
+          displayName: 'Ex-mod',
+          guild,
+          roles: { cache: new Map() },
+          permissions: new PermissionsBitField(0n)
+        };
+      }
+    }
+  };
+  const client = { guilds: { cache: new Map([[guild.id, guild]]) } };
+  const member = await discordDirectory(client as never).member(guild.id, '42');
+  assert.deepEqual(calls, [{ user: '42', force: true }]);
+  assert.deepEqual(member, { id: '42', name: 'Ex-mod', roleIds: [guild.id], isAdmin: false, canManageGuild: false });
 });

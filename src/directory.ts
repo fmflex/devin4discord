@@ -16,6 +16,8 @@ export type ChannelInfo = {
   kind: 'text' | 'announcement' | 'forum';
   category: string | null;
   position: number;
+  /** @everyone can view it; absent when unknown. */
+  public?: boolean;
   /** The bot's own Discord permissions here; absent when unknown. */
   bot?: { read: boolean; post: boolean };
 };

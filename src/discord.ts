@@ -21,6 +21,7 @@ import {
   type Channel,
   type ChatInputCommandInteraction,
   type Collection,
+  type GuildBasedChannel,
   type GuildMember,
   type Message,
   type MessageContextMenuCommandInteraction
@@ -178,6 +179,10 @@ export function memberSnapshot(member: GuildMember): MemberSnapshot {
   };
 }
 
+function everyoneCanView(channel: GuildBasedChannel) {
+  return channel.permissionsFor(channel.guild.roles.everyone)?.has(PermissionFlagsBits.ViewChannel) ?? false;
+}
+
 /** Whether Discord lets `member` view the thread: the parent's View Channel, plus membership for private threads. */
 export async function canSeeThread(member: GuildMember, threadId: string): Promise<boolean> {
   const channel =
@@ -252,6 +257,7 @@ export function discordDirectory(client: Client): Directory {
           kind,
           category: channel.parent?.name ?? null,
           position: channel.parent ? channel.parent.position * 1000 + channel.position : channel.position,
+          public: everyoneCanView(channel),
           ...(me
             ? {
                 bot: {
@@ -509,7 +515,9 @@ export function discordReader(client: Client): DiscordReader {
         guildId: channel.guildId,
         name: channel.name,
         parentId: channel.parentId ?? null,
-        isThread: channel.isThread()
+        isThread: channel.isThread(),
+        isPrivate: channel.type === ChannelType.PrivateThread,
+        isPublic: everyoneCanView(channel)
       };
     },
     async messages(channelId, { limit, before }) {

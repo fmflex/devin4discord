@@ -1,6 +1,9 @@
+import { randomToken, sha256 } from './crypto.ts';
 import type { Attachment, DevinApi, Person } from './devin.ts';
 import {
+  MCP_TASK_KEY_PREFIX,
   chunkMessage,
+  mcpTaskKeyNote,
   forwardedMessagePrompt,
   isFinalState,
   mentionPrompt,
@@ -33,6 +36,8 @@ export type StartRequest = {
   channelId: string;
   instructions: string;
   maxAcu: number | null;
+  /** The server has an MCP token, so the session gets its own task key for the task-thread tools. */
+  mcpTools?: boolean;
 } & (
   | { kind: 'message'; message: ForwardedMessage & { id: string } }
   | { kind: 'prompt'; task: string; attachments: Attachment[] }
@@ -90,13 +95,15 @@ export class Bridge {
     const devin = this.devin(request.guildId);
     if (!devin) throw new Error('Devin is not set up in this server.');
     const forwarded = request.kind === 'prompt' ? null : request.message;
+    const mcpKey = request.mcpTools ? `${MCP_TASK_KEY_PREFIX}${randomToken(32)}` : null;
+    const instructions = mcpKey ? `${request.instructions}\n\n${mcpTaskKeyNote(mcpKey)}` : request.instructions;
     let title: string;
     let attachments: Attachment[];
     let prompt: string;
     if (request.kind === 'message') {
       title = shortTitle(`${request.message.authorName}: ${request.message.content || 'attachment'}`);
       attachments = request.message.attachments;
-      prompt = forwardedMessagePrompt(request.message, request.opener, request.instructions);
+      prompt = forwardedMessagePrompt(request.message, request.opener, instructions);
     } else if (request.kind === 'mention') {
       title = shortTitle(request.text || request.context.repliedTo?.content || 'Discord request');
       attachments = [...request.message.attachments, ...(request.context.repliedTo?.attachments ?? [])];
@@ -104,12 +111,12 @@ export class Bridge {
         { text: request.text, link: request.message.link, attachments: request.message.attachments },
         request.context,
         request.opener,
-        request.instructions
+        instructions
       );
     } else {
       title = shortTitle(request.task);
       attachments = request.attachments;
-      prompt = taskPrompt(request.task, request.opener, request.instructions);
+      prompt = taskPrompt(request.task, request.opener, instructions);
     }
 
     const task = await devin.startTask({
@@ -136,7 +143,8 @@ export class Bridge {
       sourceMessageId: forwarded?.id ?? null,
       openerId: request.opener.discordId,
       title,
-      url: task.url
+      url: task.url,
+      mcpKeyHash: mcpKey ? sha256(mcpKey) : null
     });
     await this.chat.addThreadMember(threadId, request.opener.discordId).catch((error) => {
       console.error(`Adding ${request.opener.discordId} to thread ${threadId} failed:`, error);

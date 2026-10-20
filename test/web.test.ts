@@ -317,7 +317,7 @@ test('MCP read and post channels are configured together with admin opt-in', asy
   const { session, csrf } = await signIn(t);
   const allChannelFallback = await (await t.request(`/g/${G}/mcp`, { headers: { cookie: session } })).text();
   assert.doesNotMatch(allChannelFallback, /Channels marked "bot can't/);
-  assert.match(allChannelFallback, /Reading: none ticked, so it follows the Channels tab: every channel\./);
+  assert.match(allChannelFallback, /Reading: none ticked, so it follows the Channels tab: channels @everyone can see\./);
   t.guilds.setChannels(G, ['400000000000000001'], null);
   t.directory.channels = async () => [
     { id: '400000000000000001', name: 'general', kind: 'text', category: null, position: 0, bot: { read: false, post: true } },
@@ -336,7 +336,7 @@ test('MCP read and post channels are configured together with admin opt-in', asy
   assert.match(page, /About MCP read channels/);
   assert.match(page, /About MCP posting channels/);
   assert.match(page, /Channels Devin may read through MCP/);
-  assert.match(page, /With none ticked, it follows the Allowed list on the Channels tab \(every channel when that's empty too\)\./);
+  assert.match(page, /With none ticked, it follows the Allowed list on the Channels tab\. When that's empty too, it can only read channels <strong>@everyone<\/strong> can see\./);
   assert.match(page, /bot can't read here/);
   assert.match(page, /bot can't post here/);
   assert.match(page, /class="noaccess"/);

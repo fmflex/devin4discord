@@ -51,7 +51,7 @@ export type McpDeps = {
 
 export const MCP_TOKEN_PREFIX = 'd4d_';
 export const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26'];
-const MAX_BODY_BYTES = 256 * 1024;
+export const MAX_BODY_BYTES = 256 * 1024;
 const MAX_READ = 50;
 const MAX_POST_CHARS = 8000;
 

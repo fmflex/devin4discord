@@ -21,6 +21,7 @@ import {
   type Channel,
   type ChatInputCommandInteraction,
   type Collection,
+  type GuildBasedChannel,
   type GuildMember,
   type Message,
   type MessageContextMenuCommandInteraction
@@ -178,6 +179,23 @@ export function memberSnapshot(member: GuildMember): MemberSnapshot {
   };
 }
 
+function everyoneCanView(channel: GuildBasedChannel) {
+  return channel.permissionsFor(channel.guild.roles.everyone)?.has(PermissionFlagsBits.ViewChannel) ?? false;
+}
+
+/** Whether the member can see the thread in Discord: its channel's View Channel, plus membership for a private thread. */
+async function memberCanView(client: Client, member: GuildMember, threadId: string) {
+  const channel = await client.channels.fetch(threadId).catch(() => null);
+  if (!channel || channel.isDMBased() || channel.guildId !== member.guild.id) return false;
+  const perms = channel.permissionsFor(member);
+  if (!perms?.has(PermissionFlagsBits.ViewChannel)) return false;
+  if (channel.type !== ChannelType.PrivateThread || perms.has(PermissionFlagsBits.ManageThreads)) return true;
+  return channel.members.fetch({ member: member.id }).then(
+    () => true,
+    () => false
+  );
+}
+
 function channelRef(channel: Channel | null, fallbackId: string): ChannelRef {
   if (channel?.isThread()) return { id: channel.id, parentId: channel.parentId };
   return { id: channel?.id ?? fallbackId, parentId: null };
@@ -240,6 +258,7 @@ export function discordDirectory(client: Client): Directory {
           kind,
           category: channel.parent?.name ?? null,
           position: channel.parent ? channel.parent.position * 1000 + channel.position : channel.position,
+          public: everyoneCanView(channel),
           ...(me
             ? {
                 bot: {
@@ -402,7 +421,7 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore) {
     if (sub === 'stop' || sub === 'sleep') {
       return bot.controlThread(sub, interaction.guildId, member, interaction.channelId);
     }
-    return bot.list(interaction.guildId, member);
+    return bot.list(interaction.guildId, member, (threadId) => memberCanView(interaction.client, interaction.member, threadId));
   }
 
   client.on(Events.MessageReactionAdd, async (reaction, user) => {
@@ -495,7 +514,9 @@ export function discordReader(client: Client): DiscordReader {
         guildId: channel.guildId,
         name: channel.name,
         parentId: channel.parentId ?? null,
-        isThread: channel.isThread()
+        isThread: channel.isThread(),
+        isPrivate: channel.type === ChannelType.PrivateThread,
+        isPublic: everyoneCanView(channel)
       };
     },
     async messages(channelId, { limit, before }) {

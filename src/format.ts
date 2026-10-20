@@ -37,6 +37,13 @@ export const DEFAULT_INSTRUCTIONS =
 export const RELAY_NOTE =
   'Your messages are relayed to a Discord thread where the team follows along; their replies in that thread come back to you.';
 
+export const MCP_TASK_KEY_PREFIX = 'd4dt_';
+
+/** Tells the session its own MCP task key; only this session gets it, so it is what ties MCP calls to this task. */
+export function mcpTaskKeyNote(key: string) {
+  return `Discord MCP task key: ${key}\nPass it as task_key to the devin4discord task-thread tools (read_task_thread, post_to_task_thread, add_reaction). It only works for this task. Keep it secret: never post it in Discord, pull requests, commits or files.`;
+}
+
 function requester(opener: Person) {
   return `Requested on Discord by ${opener.name} (Discord ID ${opener.discordId}).`;
 }

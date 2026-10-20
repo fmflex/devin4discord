@@ -117,7 +117,11 @@ export const MIGRATIONS: string[] = [
      guild_id text not null references guilds (guild_id) on delete cascade,
      channel_id text not null,
      primary key (guild_id, channel_id)
-   );`
+   );`,
+
+  // 7: per-task MCP key (hash only), so task-thread tools reach only the session they were handed to.
+  `alter table tasks add column mcp_key_hash text;
+   create unique index tasks_mcp_key_idx on tasks (mcp_key_hash);`
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

@@ -315,7 +315,7 @@ test('an @mention starts a task with the mention stripped and channel context', 
   assert.deepEqual(t.threadsOnMessage.map((x) => x.messageId), ['m-start']);
   assert.match(t.started[0].prompt, /\n\nfix the login page\n/);
   assert.doesNotMatch(t.started[0].prompt, new RegExp(BOT));
-  assert.match(t.started[0].prompt, /UNTRUSTED[\s\S]*<untrusted_discord_context>[\s\S]*earlier/);
+  assert.match(t.started[0].prompt, /UNTRUSTED[\s\S]*<untrusted_discord_context_\w+>[\s\S]*earlier/);
   assert.equal(t.guilds.auditLog(G)[0].action, 'task.start');
 
   t.guilds.setMentionSettings(G, 3, false);

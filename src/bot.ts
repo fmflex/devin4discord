@@ -264,7 +264,7 @@ export class Bot {
     };
   }
 
-  /** Recent tasks, limited to threads `canView` says the member can see in Discord. */
+  /** Recent tasks, limited to those whose thread `canView` says the member can see in Discord. */
   async list(
     guildId: string,
     member: MemberSnapshot,

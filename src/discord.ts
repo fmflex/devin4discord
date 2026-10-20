@@ -155,7 +155,7 @@ export function commandDefinitions() {
     .addSubcommand((sub) =>
       sub.setName('status').setDescription("Status and PRs of this thread's task")
     )
-    .addSubcommand((sub) => sub.setName('list').setDescription('Recent tasks in this server'))
+    .addSubcommand((sub) => sub.setName('list').setDescription('Recent tasks in threads you can see'))
     .addSubcommand((sub) => sub.setName('stop').setDescription("Stop this thread's task for good"))
     .addSubcommand((sub) =>
       sub.setName('sleep').setDescription("Put this thread's task to sleep; a reply wakes it")
@@ -183,17 +183,16 @@ function everyoneCanView(channel: GuildBasedChannel) {
   return channel.permissionsFor(channel.guild.roles.everyone)?.has(PermissionFlagsBits.ViewChannel) ?? false;
 }
 
-/** Whether the member can see the thread in Discord: its channel's View Channel, plus membership for a private thread. */
-async function memberCanView(client: Client, member: GuildMember, threadId: string) {
-  const channel = await client.channels.fetch(threadId).catch(() => null);
-  if (!channel || channel.isDMBased() || channel.guildId !== member.guild.id) return false;
+/** Whether Discord lets `member` view the thread: the parent's View Channel, plus membership for private threads. */
+export async function canSeeThread(member: GuildMember, threadId: string): Promise<boolean> {
+  const channel =
+    member.guild.channels.cache.get(threadId) ??
+    (await member.guild.channels.fetch(threadId).catch(() => null));
+  if (!channel) return false;
   const perms = channel.permissionsFor(member);
   if (!perms?.has(PermissionFlagsBits.ViewChannel)) return false;
   if (channel.type !== ChannelType.PrivateThread || perms.has(PermissionFlagsBits.ManageThreads)) return true;
-  return channel.members.fetch({ member: member.id }).then(
-    () => true,
-    () => false
-  );
+  return Boolean(await channel.members.fetch({ member: member.id }).catch(() => null));
 }
 
 function channelRef(channel: Channel | null, fallbackId: string): ChannelRef {
@@ -421,7 +420,9 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore) {
     if (sub === 'stop' || sub === 'sleep') {
       return bot.controlThread(sub, interaction.guildId, member, interaction.channelId);
     }
-    return bot.list(interaction.guildId, member, (threadId) => memberCanView(interaction.client, interaction.member, threadId));
+    return bot.list(interaction.guildId, member, (threadId) =>
+      canSeeThread(interaction.member, threadId)
+    );
   }
 
   client.on(Events.MessageReactionAdd, async (reaction, user) => {

@@ -6,7 +6,7 @@ import { devFixtures, devLoginEnabled } from '../src/dev-web.ts';
 import type { Directory } from '../src/directory.ts';
 import { GuildStore } from '../src/guilds.ts';
 import type { MemberSnapshot } from '../src/permissions.ts';
-import { SESSION_COOKIE, STATE_COOKIE, createWebApp } from '../src/web/app.ts';
+import { MAX_FORM_BYTES, SESSION_COOKIE, STATE_COOKIE, createWebApp, type WebDeps } from '../src/web/app.ts';
 import { checkOAuthState } from '../src/web/oauth.ts';
 import { SessionStore } from '../src/web/sessions.ts';
 
@@ -17,7 +17,10 @@ const SETTINGS_ROLE = '300000000000000009';
 
 type Call = { url: string; method: string };
 
-function setup(memberOf: MemberSnapshot | null = { id: USER, name: 'Dev', roleIds: [G], isAdmin: true, canManageGuild: true }) {
+function setup(
+  memberOf: MemberSnapshot | null = { id: USER, name: 'Dev', roleIds: [G], isAdmin: true, canManageGuild: true },
+  mcp?: WebDeps['mcp']
+) {
   const db = openDatabase(':memory:');
   const guilds = new GuildStore(db);
   const secrets = new Secrets('test-master-key-test-master-key-1234');
@@ -57,6 +60,7 @@ function setup(memberOf: MemberSnapshot | null = { id: USER, name: 'Dev', roleId
     sessions: new SessionStore(db),
     directory,
     fetch: fetchImpl,
+    mcp,
     devLogin: { ...identity, guilds: [{ ...identity.guilds[0], id: G }] }
   });
   const request = (path: string, init: RequestInit = {}) => app.request(`${PUBLIC}${path}`, init);
@@ -141,6 +145,82 @@ test('forms are rejected without the CSRF token or from another origin', async (
   assert.equal(ok.status, 302);
   assert.deepEqual(t.guilds.allowedChannels(G), ['400000000000000001']);
   assert.equal(t.guilds.auditLog(G)[0].action, 'channels.update');
+});
+
+function trackedBody(chunks: number, chunkSize = 16 * 1024) {
+  const read = { chunks: 0 };
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (read.chunks >= chunks) return controller.close();
+      read.chunks++;
+      controller.enqueue(new Uint8Array(chunkSize).fill(97));
+    }
+  });
+  return { body, read };
+}
+
+test('anonymous and cross-origin POSTs are rejected before the body is read', async () => {
+  const t = setup();
+  const anonymous = trackedBody(1000);
+  const res = await t.request('/anything', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: anonymous.body,
+    duplex: 'half'
+  } as RequestInit);
+  assert.equal(res.status, 403);
+  assert.ok(anonymous.read.chunks <= 1, `read ${anonymous.read.chunks} chunks`);
+
+  const { session } = await signIn(t);
+  const foreign = trackedBody(1000);
+  const cross = await t.request(`/g/${G}/channels`, {
+    method: 'POST',
+    headers: { cookie: session, origin: 'https://evil.example', 'content-type': 'application/x-www-form-urlencoded' },
+    body: foreign.body,
+    duplex: 'half'
+  } as RequestInit);
+  assert.equal(cross.status, 403);
+  assert.ok(foreign.read.chunks <= 1, `read ${foreign.read.chunks} chunks`);
+});
+
+test('signed-in forms over the size limit are refused without being parsed', async () => {
+  const t = setup();
+  const { session, csrf } = await signIn(t);
+  const path = `/g/${G}/channels`;
+  const big = await post(t, path, session, { _csrf: csrf, allowed: '1'.repeat(MAX_FORM_BYTES) });
+  assert.equal(big.status, 413);
+
+  const streamed = trackedBody(1000);
+  const chunked = await t.request(path, {
+    method: 'POST',
+    headers: { cookie: session, origin: PUBLIC, 'content-type': 'application/x-www-form-urlencoded' },
+    body: streamed.body,
+    duplex: 'half'
+  } as RequestInit);
+  assert.equal(chunked.status, 413);
+  assert.ok(streamed.read.chunks <= MAX_FORM_BYTES / (16 * 1024) + 2, `read ${streamed.read.chunks} chunks`);
+  assert.deepEqual(t.guilds.allowedChannels(G), []);
+
+  const ok = await post(t, path, session, { _csrf: csrf, allowed: '400000000000000001', task_channel: '' });
+  assert.equal(ok.status, 302);
+});
+
+test('MCP request bodies are size-capped before the handler reads them', async () => {
+  let called = 0;
+  const t = setup(undefined, async () => {
+    called++;
+    return new Response('{}');
+  });
+  const big = await t.request('/mcp', {
+    method: 'POST',
+    headers: { authorization: 'Bearer x', 'content-type': 'application/json' },
+    body: 'x'.repeat(256 * 1024 + 1)
+  });
+  assert.equal(big.status, 413);
+  assert.equal(called, 0);
+  const small = await t.request('/mcp', { method: 'POST', headers: { authorization: 'Bearer x' }, body: '{}' });
+  assert.equal(small.status, 200);
+  assert.equal(called, 1);
 });
 
 test('server pages are checked against the live member, not the OAuth list', async () => {

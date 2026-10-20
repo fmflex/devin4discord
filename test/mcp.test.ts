@@ -190,8 +190,9 @@ test('MCP channel reads follow the allowed channels and mark content untrusted',
   assert.ok(!general.isError);
   const text = general.content[0].text;
   assert.match(text, /UNTRUSTED/);
-  assert.equal(text.match(/<\/untrusted_discord_context>/g)?.length, 1);
-  assert.match(text, /‹\/untrusted-tag/);
+  assert.equal(text.match(/<\/untrusted_discord_context_[0-9a-f]{16}>/g)?.length, 1);
+  assert.doesNotMatch(text, /<\/untrusted_discord_context>/);
+  assert.match(text, /‹\/untrusted_discord_context›/);
 
   assert.ok(!(await t.tool('read_channel', { channel_id: SUB_THREAD })).isError);
   assert.equal((await t.tool('read_channel', { channel_id: THREAD })).isError, true, 'task threads follow their channel');

@@ -544,7 +544,7 @@ test('with an MCP token, each task gets its own MCP task key in the prompt', asy
   assert.doesNotMatch(t.started[0].prompt, /task key/i);
 
   const token = newMcpToken();
-  t.guilds.setMcpToken(G, token.hash, token.hint);
+  t.guilds.setMcpToken(G, token.hash, token.hint, '1');
   await t.bot.startFromPrompt(G, admin, channel, 'one', []);
   await t.bot.startFromPrompt(G, admin, channel, 'two', []);
   const keys = t.started.slice(1).map((s) => /Discord MCP task key: (d4dt_\S+)/.exec(s.prompt)?.[1]);

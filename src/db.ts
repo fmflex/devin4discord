@@ -121,7 +121,15 @@ export const MIGRATIONS: string[] = [
 
   // 7: per-task MCP key (hash only), so task-thread tools reach only the session they were handed to.
   `alter table tasks add column mcp_key_hash text;
-   create unique index tasks_mcp_key_idx on tasks (mcp_key_hash);`
+   create unique index tasks_mcp_key_idx on tasks (mcp_key_hash);`,
+
+  // 8: the member whose Discord access bounds the MCP token, backfilled from the audit log.
+  `alter table guild_mcp add column created_by text;
+   update guild_mcp set created_by = (
+     select actor_id from audit_log
+     where audit_log.guild_id = guild_mcp.guild_id and action = 'mcp.token'
+     order by id desc limit 1
+   );`
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

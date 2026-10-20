@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { Secrets, sha256 } from '../src/crypto.ts';
 import { openDatabase } from '../src/db.ts';
 import { devFixtures, devLoginEnabled } from '../src/dev-web.ts';
-import type { Directory } from '../src/directory.ts';
+import type { ChannelInfo, Directory } from '../src/directory.ts';
 import { GuildStore } from '../src/guilds.ts';
 import type { MemberSnapshot } from '../src/permissions.ts';
 import { MAX_FORM_BYTES, SESSION_COOKIE, STATE_COOKIE, createWebApp, type WebDeps } from '../src/web/app.ts';
@@ -35,7 +35,14 @@ function setup(
     return new Response(JSON.stringify(hit.body), { status: hit.status });
   }) as typeof fetch;
   const { identity } = devFixtures(G);
-  const state = { member: memberOf };
+  const state = {
+    member: memberOf,
+    hidden: new Set<string>(),
+    channels: [
+      { id: '400000000000000001', name: 'general', kind: 'text', category: null, position: 0 },
+      { id: '400000000000000003', name: 'bug-reports', kind: 'forum', category: 'Community', position: 1 }
+    ] as ChannelInfo[]
+  };
   const directory: Directory = {
     hasGuild: (id) => id === G,
     guildName: () => 'Test server',
@@ -44,10 +51,12 @@ function setup(
       { id: G, name: '@everyone', color: 0, position: 0, managed: false },
       { id: SETTINGS_ROLE, name: 'Mods', color: 0, position: 1, managed: false }
     ],
-    channels: async () => [
-      { id: '400000000000000001', name: 'general', kind: 'text', category: null, position: 0 },
-      { id: '400000000000000003', name: 'bug-reports', kind: 'forum', category: 'Community', position: 1 }
-    ]
+    // The signed-in member can use every channel except those in `state.hidden`.
+    channels: async (_id, viewerId) =>
+      viewerId
+        ? state.channels.map((channel) => ({ ...channel, viewer: { read: !state.hidden.has(channel.id), post: !state.hidden.has(channel.id) } }))
+        : state.channels,
+    access: async (_id, _userId, channelId) => ({ read: !state.hidden.has(channelId), post: !state.hidden.has(channelId) })
   };
   const app = createWebApp({
     publicUrl: PUBLIC,
@@ -300,13 +309,13 @@ test('the MCP token is shown once, stored hashed, rotated and revoked', async ()
   assert.ok(token);
   const stored = t.db.prepare('select token_hash from guild_mcp where guild_id = ?').get(G) as { token_hash: string };
   assert.notEqual(stored.token_hash, token);
-  assert.equal(t.guilds.guildForMcpToken(sha256(token)), G);
+  assert.deepEqual(t.guilds.mcpTokenOwner(sha256(token)), { guildId: G, createdBy: USER });
   const again = await (await t.request(`/g/${G}/mcp`, { headers: { cookie: session } })).text();
   assert.ok(!again.includes(token));
   assert.match(again, new RegExp(`ends in …${token.slice(-4)}`));
 
   await post(t, `/g/${G}/mcp/token`, session, { _csrf: csrf });
-  assert.equal(t.guilds.guildForMcpToken(sha256(token)), null);
+  assert.equal(t.guilds.mcpTokenOwner(sha256(token)), null);
   assert.equal((await post(t, `/g/${G}/mcp/remove`, session, { _csrf: csrf })).status, 302);
   assert.equal(t.guilds.mcpToken(G), null);
   assert.deepEqual(t.guilds.auditLog(G).map((e) => e.action), ['mcp.remove', 'mcp.token', 'mcp.token']);
@@ -319,7 +328,7 @@ test('MCP read and post channels are configured together with admin opt-in', asy
   assert.doesNotMatch(allChannelFallback, /Channels marked "bot can't/);
   assert.match(allChannelFallback, /Reading: none ticked, so it follows the Channels tab: channels @everyone can see\./);
   t.guilds.setChannels(G, ['400000000000000001'], null);
-  t.directory.channels = async () => [
+  t.state.channels = [
     { id: '400000000000000001', name: 'general', kind: 'text', category: null, position: 0, bot: { read: false, post: true } },
     { id: '400000000000000003', name: 'bug-reports', kind: 'forum', category: 'Community', position: 1 },
     { id: '400000000000000004', name: 'dev-help', kind: 'text', category: 'Development', position: 2, bot: { read: true, post: false } }
@@ -337,6 +346,7 @@ test('MCP read and post channels are configured together with admin opt-in', asy
   assert.match(page, /About MCP posting channels/);
   assert.match(page, /Channels Devin may read through MCP/);
   assert.match(page, /With none ticked, it follows the Allowed list on the Channels tab\. When that's empty too, it can only read channels <strong>@everyone<\/strong> can see\./);
+  assert.doesNotMatch(page, /you can't (read|post) here/);
   assert.match(page, /bot can't read here/);
   assert.match(page, /bot can't post here/);
   assert.match(page, /class="noaccess"/);
@@ -372,6 +382,45 @@ test('MCP read and post channels are configured together with admin opt-in', asy
   const savedPage = await (await t.request(`/g/${G}/mcp`, { headers: { cookie: session } })).text();
   assert.match(savedPage, /name="read" value="400000000000000001"[^>]*checked/);
   assert.match(savedPage, /name="post" value="400000000000000001"[^>]*checked/);
+});
+
+test('MCP channels are limited to what the member can use on Discord', async () => {
+  const t = setup({ id: USER, name: 'Mod', roleIds: [G], isAdmin: false, canManageGuild: true });
+  const { session, csrf } = await signIn(t);
+  const GENERAL = '400000000000000001';
+  const STAFF = '400000000000000005';
+  t.state.channels = [
+    { id: GENERAL, name: 'general', kind: 'text', category: null, position: 0 },
+    { id: STAFF, name: 'staff', kind: 'text', category: null, position: 1 }
+  ];
+  t.state.hidden.add(STAFF);
+  const page = await (await t.request(`/g/${G}/mcp`, { headers: { cookie: session } })).text();
+  assert.match(page, new RegExp(`name="read" value="${STAFF}"[^>]*disabled`));
+  assert.match(page, new RegExp(`name="post" value="${STAFF}"[^>]*disabled`));
+  assert.match(page, /you can't read here/);
+  assert.match(page, /you can't post here/);
+  assert.doesNotMatch(page, new RegExp(`name="read" value="${GENERAL}"[^>]*disabled`));
+
+  const save = (pairs: [string, string][]) =>
+    t.request(`/g/${G}/mcp/channels`, {
+      method: 'POST',
+      headers: { cookie: session, origin: PUBLIC, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams([['_csrf', csrf], ...pairs])
+    });
+  assert.equal((await save([['read', GENERAL], ['read', STAFF], ['post', STAFF]])).status, 302);
+  assert.deepEqual(t.guilds.mcpReadChannels(G), [GENERAL]);
+  assert.deepEqual(t.guilds.mcpPostChannels(G), []);
+
+  // A channel someone with access picked stays as it is when this member saves.
+  t.guilds.setMcpChannels(G, [GENERAL, STAFF], [STAFF]);
+  assert.equal((await save([])).status, 302);
+  assert.deepEqual(t.guilds.mcpReadChannels(G), [STAFF]);
+  assert.deepEqual(t.guilds.mcpPostChannels(G), [STAFF]);
+
+  const created = await post(t, `/g/${G}/mcp/token`, session, { _csrf: csrf });
+  const token = /<code class="token">(d4d_[\w-]+)<\/code>/.exec(await created.text())?.[1];
+  assert.ok(token);
+  assert.deepEqual(t.guilds.mcpTokenOwner(sha256(token)), { guildId: G, createdBy: USER });
 });
 
 test('/mcp skips the cookie session and CSRF checks but needs a token', async () => {
@@ -420,7 +469,7 @@ test('dev login is only enabled with NODE_ENV=development and DEV_LOGIN_GUILD_ID
     secrets: t.secrets,
     guilds: t.guilds,
     sessions: new SessionStore(t.db),
-    directory: { hasGuild: () => false, guildName: () => null, member: async () => null, roles: async () => [], channels: async () => [] }
+    directory: { hasGuild: () => false, guildName: () => null, member: async () => null, roles: async () => [], channels: async () => [], access: async () => ({ read: false, post: false }) }
   });
   assert.equal((await prod.request(`${PUBLIC}/auth/dev`)).status, 404);
 });

@@ -17,6 +17,7 @@ const OTHER_THREAD = '500000000000000002';
 const SUB_THREAD = '500000000000000003';
 const PRIVATE_THREAD = '500000000000000004';
 const MSG = '600000000000000001';
+const CREATOR = '100000000000000009';
 const KEY = `d4dt_${'a'.repeat(43)}`;
 const OTHER_KEY = `d4dt_${'z'.repeat(43)}`;
 
@@ -52,22 +53,33 @@ function setup() {
     },
     react: async (channelId, messageId, emoji) => void reactions.push(`${channelId}/${messageId}/${emoji}`)
   };
+  // What each member may do on Discord, by channel or thread ID; the token creator can use everything by default.
+  const denied = new Map<string, Set<string>>();
+  const may = (userId: string, channelId: string) => !denied.get(userId)?.has(channelId);
+  const accessChecks: string[] = [];
   const directory: Directory = {
     hasGuild: () => true,
     guildName: () => 'Test',
     member: async () => null,
     roles: async () => [],
-    channels: async () => [
-      { id: GENERAL, name: 'general', kind: 'text', category: null, position: 0, public: true },
-      { id: SECRET_CH, name: 'staff', kind: 'text', category: null, position: 1, public: false, bot: { read: false, post: false } }
-    ]
+    channels: async (_id, viewerId) =>
+      [
+        { id: GENERAL, name: 'general', kind: 'text' as const, category: null, position: 0, public: true },
+        { id: SECRET_CH, name: 'staff', kind: 'text' as const, category: null, position: 1, public: false, bot: { read: false, post: false } }
+      ].map((channel) =>
+        viewerId ? { ...channel, viewer: { read: may(viewerId, channel.id), post: may(viewerId, channel.id) } } : channel
+      ),
+    access: async (_id, userId, channelId) => {
+      accessChecks.push(`${userId}/${channelId}`);
+      return { read: may(userId, channelId), post: may(userId, channelId) };
+    }
   };
   guilds.ensure(G, 'Test');
   guilds.setChannels(G, [GENERAL], null);
   const { token, hash, hint } = newMcpToken();
-  guilds.setMcpToken(G, hash, hint);
+  guilds.setMcpToken(G, hash, hint, CREATOR);
   const other = newMcpToken();
-  guilds.setMcpToken(OTHER, other.hash, other.hint);
+  guilds.setMcpToken(OTHER, other.hash, other.hint, CREATOR);
   tasks.insert({ taskId: 'devin-abc123', guildId: G, threadId: THREAD, sourceMessageId: null, openerId: '1', title: 'fix', url: 'u', mcpKeyHash: sha256(KEY) });
   tasks.insert({ taskId: 'devin-zzz999', guildId: OTHER, threadId: OTHER_THREAD, sourceMessageId: null, openerId: '1', title: 'x', url: 'u', mcpKeyHash: sha256(OTHER_KEY) });
   const handle = createMcpHandler({ publicUrl: PUBLIC, guilds, tasks, directory, reader });
@@ -88,7 +100,7 @@ function setup() {
     const { body } = await rpc('tools/call', { name, arguments: args });
     return body.result as { content: { text: string }[]; isError?: boolean };
   };
-  return { handle, rpc, tool, token, other, guilds, tasks, sent, reactions, reads };
+  return { handle, rpc, tool, token, other, guilds, tasks, sent, reactions, reads, denied, accessChecks, db };
 }
 
 test('MCP rejects missing, unknown and revoked tokens and foreign origins', async () => {
@@ -159,7 +171,7 @@ test('MCP channel posting is opt-in for channels and their threads', async () =>
   assert.equal(denied.isError, true);
   assert.equal(t.sent.length, 0);
 
-  t.guilds.setMcpChannels(G, [], [GENERAL]);
+  t.guilds.setMcpChannels(G, [GENERAL], [GENERAL]);
   const general = await t.tool('post_to_channel', { channel_id: GENERAL, content: 'hello' });
   assert.ok(!general.isError);
   assert.deepEqual(t.sent.map((message) => message.channelId), [GENERAL]);
@@ -234,6 +246,45 @@ test('MCP read channels override the Channels tab allowlist and fall back when e
 
   t.guilds.setMcpChannels(G, [], []);
   assert.ok(!(await t.tool('read_channel', { channel_id: GENERAL })).isError, 'empty MCP list follows the Channels tab');
+});
+
+test('MCP reads and posts are limited to what the token creator can do on Discord', async () => {
+  const t = setup();
+  t.guilds.setMcpChannels(G, [GENERAL, SECRET_CH], [GENERAL, SECRET_CH]);
+  t.denied.set(CREATOR, new Set([SECRET_CH, SUB_THREAD]));
+
+  const staff = await t.tool('read_channel', { channel_id: SECRET_CH });
+  assert.equal(staff.isError, true);
+  assert.match(staff.content[0].text, /member who generated this MCP token can't read in that channel/);
+  assert.equal((await t.tool('get_message', { channel_id: SECRET_CH, message_id: MSG })).isError, true);
+  assert.equal((await t.tool('read_channel', { channel_id: SUB_THREAD })).isError, true, 'threads are checked themselves');
+  const posted = await t.tool('post_to_channel', { channel_id: SECRET_CH, content: 'no' });
+  assert.match(posted.content[0].text, /can't post in that channel/);
+  assert.equal(t.sent.length, 0);
+  assert.ok(!(await t.tool('read_channel', { channel_id: GENERAL })).isError);
+  assert.ok(!(await t.tool('read_channel', { channel_id: THREAD })).isError, 'task threads skip the check');
+  assert.deepEqual(t.reads, [GENERAL, THREAD]);
+  assert.ok(t.accessChecks.every((check) => check.startsWith(`${CREATOR}/`)));
+
+  const list = (await t.tool('list_channels', {})).content[0].text;
+  assert.doesNotMatch(list, /#staff/);
+  assert.match(list, /You may post in:\n- #general/);
+
+  // The creator losing access later is picked up on the next call.
+  t.denied.set(CREATOR, new Set([GENERAL]));
+  assert.equal((await t.tool('read_channel', { channel_id: GENERAL })).isError, true);
+});
+
+test('an MCP token without a recorded creator only reaches task threads', async () => {
+  const t = setup();
+  t.db.prepare('update guild_mcp set created_by = null where guild_id = ?').run(G);
+  t.guilds.setMcpChannels(G, [GENERAL], [GENERAL]);
+  const read = await t.tool('read_channel', { channel_id: GENERAL });
+  assert.equal(read.isError, true);
+  assert.match(read.content[0].text, /no recorded creator/);
+  assert.equal((await t.tool('post_to_channel', { channel_id: GENERAL, content: 'no' })).isError, true);
+  assert.match((await t.tool('list_channels', {})).content[0].text, /Only your task threads/);
+  assert.ok(!(await t.tool('read_task_thread', { task_key: KEY })).isError);
 });
 
 test('MCP reads with no list at all reach only channels everyone can see', async () => {

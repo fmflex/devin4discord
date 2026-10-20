@@ -51,7 +51,9 @@ export function devFixtures(guildId: string) {
         ? { id: userId, name: 'Dev Admin', roleIds: [guildId, '300000000000000001'], isAdmin: true, canManageGuild: true }
         : null,
     roles: async () => roles,
-    channels: async () => channels
+    channels: async (_id, viewerId) =>
+      viewerId ? channels.map((channel) => ({ ...channel, viewer: { read: viewerId === userId, post: viewerId === userId } })) : channels,
+    access: async (_id, memberId) => ({ read: memberId === userId, post: memberId === userId })
   };
   return { identity, directory };
 }

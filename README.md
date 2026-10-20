@@ -52,7 +52,7 @@ Each server can give Devin an MCP server, so that during a task Devin can read a
 | `read_channel` | Read a channel ticked under Read or one of its threads |
 | `get_message` | Read one message, e.g. from a link |
 
-The token decides which server a call is for. The MCP page picks separate Read and Post channel lists. Read defaults to the Channels tab's Allowed list (every channel when that's empty); Post defaults to none. Task threads are always readable and postable through the task-thread tools. Everything read is returned inside an UNTRUSTED block, the same as mention context. The endpoint speaks Streamable HTTP with JSON responses (`POST` only; `GET` returns 405). It rejects requests whose `Origin` isn't `PUBLIC_URL`.
+The token decides which server a call is for. The MCP page picks separate Read and Post channel lists. Both default to none. Outside task threads the token acts with the Discord access of the member who generated it, checked live on every call, and a member can only tick channels they can read (or post in) themselves. Task threads are always readable and postable through the task-thread tools. Everything read is returned inside an UNTRUSTED block, the same as mention context. The endpoint speaks Streamable HTTP with JSON responses (`POST` only; `GET` returns 405). It rejects requests whose `Origin` isn't `PUBLIC_URL`.
 
 `PUBLIC_URL` is the MCP URL too, so on a quick tunnel you have to update it in Devin whenever the tunnel URL changes.
 

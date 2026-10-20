@@ -228,7 +228,7 @@ export class GuildStore {
     });
   }
 
-  /** Channels Devin may read through MCP; empty means follow the Channels tab. */
+  /** Channels Devin may read through MCP; empty means none (task threads only). */
   mcpReadChannels(guildId: string): string[] {
     return (
       this.db
@@ -272,34 +272,35 @@ export class GuildStore {
   }
 
   /** The server's MCP token, without the token itself. */
-  mcpToken(guildId: string): { hint: string; createdAt: number } | null {
+  mcpToken(guildId: string): { hint: string; createdAt: number; createdBy: string | null } | null {
     const row = this.db
-      .prepare('select token_hint, created_at from guild_mcp where guild_id = ?')
-      .get(guildId) as { token_hint: string; created_at: number } | undefined;
-    return row ? { hint: row.token_hint, createdAt: row.created_at } : null;
+      .prepare('select token_hint, created_at, created_by from guild_mcp where guild_id = ?')
+      .get(guildId) as { token_hint: string; created_at: number; created_by: string | null } | undefined;
+    return row ? { hint: row.token_hint, createdAt: row.created_at, createdBy: row.created_by } : null;
   }
 
-  /** Replaces the server's MCP token; the old one stops working. */
-  setMcpToken(guildId: string, tokenHash: string, hint: string) {
+  /** Replaces the server's MCP token; the old one stops working. It acts with `createdBy`'s Discord access. */
+  setMcpToken(guildId: string, tokenHash: string, hint: string, createdBy: string) {
     this.ensure(guildId);
     this.db
       .prepare(
-        `insert into guild_mcp (guild_id, token_hash, token_hint, created_at) values (?, ?, ?, ?)
-         on conflict (guild_id) do update set token_hash = excluded.token_hash, token_hint = excluded.token_hint, created_at = excluded.created_at`
+        `insert into guild_mcp (guild_id, token_hash, token_hint, created_at, created_by) values (?, ?, ?, ?, ?)
+         on conflict (guild_id) do update set token_hash = excluded.token_hash, token_hint = excluded.token_hint,
+           created_at = excluded.created_at, created_by = excluded.created_by`
       )
-      .run(guildId, tokenHash, hint, Date.now());
+      .run(guildId, tokenHash, hint, Date.now(), createdBy);
   }
 
   clearMcpToken(guildId: string) {
     this.db.prepare('delete from guild_mcp where guild_id = ?').run(guildId);
   }
 
-  /** The server an MCP token belongs to, looked up by the token's hash. */
-  guildForMcpToken(tokenHash: string): string | null {
+  /** The server an MCP token belongs to and the member who generated it, looked up by the token's hash. */
+  mcpTokenOwner(tokenHash: string): { guildId: string; createdBy: string | null } | null {
     const row = this.db
-      .prepare('select guild_id from guild_mcp where token_hash = ?')
-      .get(tokenHash) as { guild_id: string } | undefined;
-    return row?.guild_id ?? null;
+      .prepare('select guild_id, created_by from guild_mcp where token_hash = ?')
+      .get(tokenHash) as { guild_id: string; created_by: string | null } | undefined;
+    return row ? { guildId: row.guild_id, createdBy: row.created_by } : null;
   }
 
   audit(guildId: string, actor: Actor, action: string, detail = '') {

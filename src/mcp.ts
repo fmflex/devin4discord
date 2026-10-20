@@ -1,11 +1,12 @@
 /**
  * Per-server MCP endpoint for Devin (Streamable HTTP, JSON responses only).
  * The bearer token picks the server; every tool is limited to that server's
- * task threads and allowed channels, and everything read back is marked as
- * untrusted Discord content.
+ * task threads and the channels picked on the MCP page, and outside task
+ * threads also to what the member who generated the token can do on Discord.
+ * Everything read back is marked as untrusted Discord content.
  */
 import { randomToken, sha256 } from './crypto.ts';
-import type { Directory } from './directory.ts';
+import type { ChannelAccess, Directory } from './directory.ts';
 import { UNTRUSTED_TAG, chunkMessage, neutralize } from './format.ts';
 import type { GuildStore } from './guilds.ts';
 import type { TaskRow, TaskStore } from './store.ts';
@@ -40,6 +41,8 @@ export interface DiscordReader {
   send(channelId: string, content: string): Promise<string>;
   react(channelId: string, messageId: string, emoji: string): Promise<void>;
 }
+
+type TokenOwner = { guildId: string; createdBy: string | null };
 
 export type McpDeps = {
   publicUrl: string;
@@ -214,27 +217,34 @@ export function createMcpHandler(deps: McpDeps) {
     throw new ToolError('No Discord task in this server for that session ID.');
   }
 
-  async function readable(guildId: string, channelId: string) {
+  const NEW_TOKEN = 'Generate a new token on the MCP page of the setup site so its channel access can be checked.';
+
+  /** Outside task threads the token acts with its creator's Discord access, checked live on every call. */
+  async function creatorMay(owner: TokenOwner, channelId: string, what: keyof ChannelAccess) {
+    if (!owner.createdBy) throw new ToolError(`This MCP token has no recorded creator. ${NEW_TOKEN}`);
+    const access = await deps.directory.access(owner.guildId, owner.createdBy, channelId);
+    if (!access[what]) {
+      throw new ToolError(
+        `The member who generated this MCP token can't ${what} in that channel on Discord, so Devin can't either.`
+      );
+    }
+  }
+
+  function picked(list: string[], channel: ChannelRef) {
+    return list.includes(channel.id) || (channel.isThread && channel.parentId !== null && list.includes(channel.parentId));
+  }
+
+  async function readable(owner: TokenOwner, channelId: string) {
+    const { guildId } = owner;
     const channel = await deps.reader.channel(channelId);
     if (!channel || channel.guildId !== guildId) throw new ToolError('Channel not found in this server.');
     const task = deps.tasks.byThread(channel.id);
     if (task && task.guildId === guildId) return channel;
-    const { ids: allowed } = readList(guildId);
-    if (
-      allowed.length &&
-      !allowed.includes(channel.id) &&
-      !(channel.parentId && allowed.includes(channel.parentId))
-    ) {
+    if (!picked(deps.guilds.mcpReadChannels(guildId), channel)) {
       throw new ToolError("That channel isn't one of the channels this server lets Devin read through MCP.");
     }
+    await creatorMay(owner, channel.id, 'read');
     return channel;
-  }
-
-  function readList(guildId: string): { ids: string[]; source: 'mcp' | 'channels' } {
-    const mcp = deps.guilds.mcpReadChannels(guildId);
-    return mcp.length
-      ? { ids: mcp, source: 'mcp' }
-      : { ids: deps.guilds.allowedChannels(guildId), source: 'channels' };
   }
 
   async function post(channelId: string, args: ToolArgs) {
@@ -245,7 +255,8 @@ export function createMcpHandler(deps: McpDeps) {
     return `Posted ${ids.length} message${ids.length === 1 ? '' : 's'}: ${ids.join(', ')}.`;
   }
 
-  async function call(guildId: string, name: string, args: ToolArgs): Promise<string> {
+  async function call(owner: TokenOwner, name: string, args: ToolArgs): Promise<string> {
+    const { guildId } = owner;
     switch (name) {
       case 'read_task_thread': {
         const task = taskFor(guildId, str(args, 'session_id'));
@@ -263,13 +274,10 @@ export function createMcpHandler(deps: McpDeps) {
       case 'post_to_channel': {
         const channel = await deps.reader.channel(snowflake(args, 'channel_id'));
         if (!channel || channel.guildId !== guildId) throw new ToolError('Channel not found in this server.');
-        const postable = deps.guilds.mcpPostChannels(guildId);
-        if (
-          !postable.includes(channel.id) &&
-          !(channel.isThread && channel.parentId && postable.includes(channel.parentId))
-        ) {
+        if (!picked(deps.guilds.mcpPostChannels(guildId), channel)) {
           throw new ToolError("Devin isn't allowed to post in that channel. A server admin can allow it on the MCP page of the setup site.");
         }
+        await creatorMay(owner, channel.id, 'post');
         return post(channel.id, args);
       }
       case 'add_reaction': {
@@ -281,40 +289,32 @@ export function createMcpHandler(deps: McpDeps) {
         return 'Reacted.';
       }
       case 'list_channels': {
-        const { ids: allowed, source } = readList(guildId);
-        const directoryChannels = await deps.directory.channels(guildId);
-        const channels = directoryChannels
-          .filter((channel) => !allowed.length || allowed.includes(channel.id))
-          .sort((a, b) => a.position - b.position);
-        const scope =
-          source === 'mcp'
-            ? 'the channels picked on the MCP page'
-            : allowed.length
-              ? 'the allowed channels'
-              : 'every channel (this server allows all)';
-        const readable = channels.length
-          ? `You may read ${scope}, their threads and the task threads:\n${channels
+        if (!owner.createdBy) return `Only your task threads: this MCP token has no recorded creator. ${NEW_TOKEN}`;
+        const readIds = deps.guilds.mcpReadChannels(guildId);
+        const postIds = deps.guilds.mcpPostChannels(guildId);
+        const directoryChannels = (await deps.directory.channels(guildId, owner.createdBy)).sort(
+          (a, b) => a.position - b.position
+        );
+        const botNote = (lacks: boolean) => (lacks ? ' (bot lacks Discord access)' : '');
+        const readChannels = directoryChannels.filter((c) => readIds.includes(c.id) && c.viewer?.read);
+        const readable = readChannels.length
+          ? `You may read the channels picked on the MCP page, their threads and the task threads:\n${readChannels
               .map(
                 (c) =>
-                  `- #${neutralize(c.name)} (${c.kind}${c.category ? `, ${neutralize(c.category)}` : ''}): ${c.id}${c.bot?.read === false ? ' (bot lacks Discord access)' : ''}`
+                  `- #${neutralize(c.name)} (${c.kind}${c.category ? `, ${neutralize(c.category)}` : ''}): ${c.id}${botNote(c.bot?.read === false)}`
               )
               .join('\n')}`
-          : 'No readable channels.';
-        const postable = deps.guilds.mcpPostChannels(guildId);
-        const posting = postable.length
-          ? `You may post in:\n${directoryChannels
-              .filter((channel) => postable.includes(channel.id))
-              .sort((a, b) => a.position - b.position)
-              .map(
-                (channel) =>
-                  `- #${neutralize(channel.name)}: ${channel.id}${channel.bot?.post === false ? ' (bot lacks Discord access)' : ''}`
-              )
+          : 'Reading: only your task threads (a server admin can pick channels on the MCP page).';
+        const postChannels = directoryChannels.filter((c) => postIds.includes(c.id) && c.viewer?.post);
+        const posting = postChannels.length
+          ? `You may post in:\n${postChannels
+              .map((c) => `- #${neutralize(c.name)}: ${c.id}${botNote(c.bot?.post === false)}`)
               .join('\n')}`
           : 'Posting: no channels (a server admin can allow some on the MCP page).';
         return `${readable}\n\n${posting}`;
       }
       case 'read_channel': {
-        const channel = await readable(guildId, snowflake(args, 'channel_id'));
+        const channel = await readable(owner, snowflake(args, 'channel_id'));
         const messages = await deps.reader.messages(channel.id, {
           limit: limit(args),
           before: snowflake(args, 'before', false) || undefined
@@ -322,7 +322,7 @@ export function createMcpHandler(deps: McpDeps) {
         return formatMessages(`#${neutralize(channel.name)}`, messages);
       }
       case 'get_message': {
-        const channel = await readable(guildId, snowflake(args, 'channel_id'));
+        const channel = await readable(owner, snowflake(args, 'channel_id'));
         const message = await deps.reader.message(channel.id, snowflake(args, 'message_id'));
         if (!message) throw new ToolError('Message not found.');
         return formatMessages(`#${neutralize(channel.name)}`, [message]);
@@ -338,8 +338,8 @@ export function createMcpHandler(deps: McpDeps) {
     if (request.method !== 'POST') return json({ error: 'Use POST.' }, 405, { Allow: 'POST' });
 
     const auth = /^Bearer\s+(\S+)$/i.exec(request.headers.get('authorization') ?? '');
-    const guildId = auth ? deps.guilds.guildForMcpToken(sha256(auth[1])) : null;
-    if (!guildId) {
+    const owner = auth ? deps.guilds.mcpTokenOwner(sha256(auth[1])) : null;
+    if (!owner) {
       return json({ error: 'Missing or unknown token.' }, 401, { 'WWW-Authenticate': 'Bearer' });
     }
 
@@ -378,7 +378,7 @@ export function createMcpHandler(deps: McpDeps) {
         const name = typeof params.name === 'string' ? params.name : '';
         const args = (params.arguments && typeof params.arguments === 'object' ? params.arguments : {}) as ToolArgs;
         try {
-          return result({ content: [{ type: 'text', text: await call(guildId, name, args) }] });
+          return result({ content: [{ type: 'text', text: await call(owner, name, args) }] });
         } catch (error) {
           const text =
             error instanceof ToolError ? error.message : 'Discord request failed. Try again, or check the bot can see that channel.';

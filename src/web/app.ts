@@ -4,7 +4,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import { randomToken, safeEqual, type Secrets } from '../crypto.ts';
 import { verifyDevinCredentials } from '../devin.ts';
 import { newMcpToken } from '../mcp.ts';
-import type { Directory } from '../directory.ts';
+import type { ChannelInfo, Directory } from '../directory.ts';
 import { DEFAULT_CONTEXT_MESSAGES, MAX_CONTEXT_MESSAGES, type Actor, type GuildStore } from '../guilds.ts';
 import {
   ADMIN_DEFAULT,
@@ -501,18 +501,17 @@ export function createWebApp(deps: WebDeps) {
 
   const mcpUrl = `${deps.publicUrl}/mcp`;
 
-  async function mcpChannelSettings(guildId: string) {
+  async function mcpChannelSettings(guildId: string, viewerId: string) {
     return {
-      channels: await deps.directory.channels(guildId),
+      channels: await deps.directory.channels(guildId, viewerId),
       read: deps.guilds.mcpReadChannels(guildId),
-      post: deps.guilds.mcpPostChannels(guildId),
-      allowed: deps.guilds.allowedChannels(guildId)
+      post: deps.guilds.mcpPostChannels(guildId)
     };
   }
 
   app.get('/g/:guildId/mcp', async (c) => {
-    const { session, guild } = ctx(c);
-    const settings = await mcpChannelSettings(guild.id);
+    const { session, guild, actor } = ctx(c);
+    const settings = await mcpChannelSettings(guild.id, actor.id);
     return c.html(
       mcpPage(
         session,
@@ -530,10 +529,10 @@ export function createWebApp(deps: WebDeps) {
     const { session, guild, actor } = ctx(c);
     const rotated = Boolean(deps.guilds.mcpToken(guild.id));
     const { token, hash, hint } = newMcpToken();
-    deps.guilds.setMcpToken(guild.id, hash, hint);
+    deps.guilds.setMcpToken(guild.id, hash, hint, actor.id);
     deps.guilds.audit(guild.id, actor, 'mcp.token', `${rotated ? 'rotated' : 'created'}, ends in …${hint}`);
     c.header('Cache-Control', 'no-store');
-    const settings = await mcpChannelSettings(guild.id);
+    const settings = await mcpChannelSettings(guild.id, actor.id);
     return c.html(
       mcpPage(
         session,
@@ -550,22 +549,28 @@ export function createWebApp(deps: WebDeps) {
   app.post('/g/:guildId/mcp/channels', async (c) => {
     const { guild, actor } = ctx(c);
     const form = (await c.req.parseBody({ all: true })) as Form;
-    const { channels } = await mcpChannelSettings(guild.id);
+    const { channels, read, post } = await mcpChannelSettings(guild.id, actor.id);
     const names = new Map(channels.map((channel) => [channel.id, channel.name]));
-    const postableIds = new Set(
-      channels
-        .filter((channel) => channel.kind === 'text' || channel.kind === 'announcement')
-        .map((channel) => channel.id)
+    // Members only change channels they can use on Discord themselves; the rest keep their saved state.
+    const choose = (name: string, saved: string[], may: (channel: ChannelInfo) => boolean) => {
+      const ticked = new Set(fields(form, name));
+      return channels
+        .filter((channel) => (may(channel) ? ticked.has(channel.id) : saved.includes(channel.id)))
+        .map((channel) => channel.id);
+    };
+    const readable = choose('read', read, (channel) => channel.viewer?.read === true);
+    const postable = choose(
+      'post',
+      post,
+      (channel) => (channel.kind === 'text' || channel.kind === 'announcement') && channel.viewer?.post === true
     );
-    const readable = fields(form, 'read').filter((id) => names.has(id));
-    const postable = fields(form, 'post').filter((id) => postableIds.has(id));
     deps.guilds.setMcpChannels(guild.id, readable, postable);
     const label = (id: string) => `#${names.get(id)}`;
     deps.guilds.audit(
       guild.id,
       actor,
       'mcp.channels',
-      `read: ${readable.map(label).join(', ') || 'Channels tab'}; post: ${postable.map(label).join(', ') || 'none'}`
+      `read: ${readable.map(label).join(', ') || 'none'}; post: ${postable.map(label).join(', ') || 'none'}`
     );
     return c.redirect(`/g/${guild.id}/mcp?saved=1`);
   });

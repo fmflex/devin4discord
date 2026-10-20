@@ -117,6 +117,15 @@ export const MIGRATIONS: string[] = [
      guild_id text not null references guilds (guild_id) on delete cascade,
      channel_id text not null,
      primary key (guild_id, channel_id)
+   );`,
+
+  // 7: the member whose Discord access bounds the MCP token, backfilled from the
+  // audit log. An empty MCP read list now means no channels, not the Channels tab.
+  `alter table guild_mcp add column created_by text;
+   update guild_mcp set created_by = (
+     select actor_id from audit_log
+     where audit_log.guild_id = guild_mcp.guild_id and action = 'mcp.token'
+     order by id desc limit 1
    );`
 ];
 

@@ -21,16 +21,18 @@ import {
   type Channel,
   type ChatInputCommandInteraction,
   type Collection,
+  type Guild,
   type GuildMember,
   type Message,
-  type MessageContextMenuCommandInteraction
+  type MessageContextMenuCommandInteraction,
+  type PermissionsBitField
 } from 'discord.js';
 import type { Bot, ChannelRef, MessageOutcome, Outcome } from './bot.ts';
 import type { ChatButton, ChatPort } from './bridge.ts';
 import type { DiscordReader, ReadMessage } from './mcp.ts';
 import type { ForwardedMessage, MentionContext } from './format.ts';
 import type { Attachment } from './devin.ts';
-import type { ChannelInfo, Directory } from './directory.ts';
+import type { ChannelAccess, ChannelInfo, Directory } from './directory.ts';
 import type { MemberSnapshot } from './permissions.ts';
 import type { TaskStore } from './store.ts';
 import { parseControlId } from './triggers.ts';
@@ -197,15 +199,8 @@ export function discordDirectory(client: Client): Directory {
     async member(guildId, userId) {
       const guild = client.guilds.cache.get(guildId);
       if (!guild) return null;
-      try {
-        // Without the GuildMembers intent the cache never hears about role changes, kicks or bans.
-        return memberSnapshot(await guild.members.fetch({ user: userId, force: true }));
-      } catch (error) {
-        if (error instanceof DiscordAPIError && error.code === RESTJSONErrorCodes.UnknownMember) {
-          return null;
-        }
-        throw error;
-      }
+      const member = await freshMember(guild, userId);
+      return member ? memberSnapshot(member) : null;
     },
     async roles(guildId) {
       const guild = client.guilds.cache.get(guildId);
@@ -219,7 +214,7 @@ export function discordDirectory(client: Client): Directory {
         managed: role.managed
       }));
     },
-    async channels(guildId) {
+    async channels(guildId, viewerId) {
       const guild = client.guilds.cache.get(guildId);
       if (!guild) return [];
       const channels = await guild.channels.fetch();
@@ -229,30 +224,64 @@ export function discordDirectory(client: Client): Directory {
       } catch {
         me = null;
       }
+      const viewer = viewerId ? await freshMember(guild, viewerId) : null;
       const result: ChannelInfo[] = [];
       for (const channel of channels.values()) {
         const kind = channel && CHANNEL_KINDS[channel.type];
         if (!channel || !kind) continue;
-        const perms = me ? channel.permissionsFor(me) : null;
         result.push({
           id: channel.id,
           name: channel.name,
           kind,
           category: channel.parent?.name ?? null,
           position: channel.parent ? channel.parent.position * 1000 + channel.position : channel.position,
-          ...(me
-            ? {
-                bot: {
-                  read: perms?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory]) ?? false,
-                  post: perms?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages]) ?? false
-                }
-              }
-            : {})
+          ...(me ? { bot: channelAccess(channel.permissionsFor(me), false) } : {}),
+          ...(viewerId ? { viewer: viewer ? channelAccess(channel.permissionsFor(viewer), false) : NO_ACCESS } : {})
         });
       }
       return result;
+    },
+    async access(guildId, userId, channelId) {
+      const guild = client.guilds.cache.get(guildId);
+      if (!guild) return NO_ACCESS;
+      const [member, channel] = await Promise.all([
+        freshMember(guild, userId),
+        client.channels.fetch(channelId).catch(() => null)
+      ]);
+      if (!member || !channel || channel.isDMBased() || channel.guildId !== guildId) return NO_ACCESS;
+      const perms = channel.permissionsFor(member);
+      const access = channelAccess(perms, channel.isThread());
+      // A private thread is only visible to its members and to Manage Threads holders.
+      if (
+        channel.type === ChannelType.PrivateThread &&
+        !perms?.has(PermissionFlagsBits.ManageThreads) &&
+        !(await channel.members.fetch({ member: userId, force: true }).catch(() => null))
+      ) {
+        return NO_ACCESS;
+      }
+      return access;
     }
   };
+}
+
+const NO_ACCESS: ChannelAccess = { read: false, post: false };
+
+function channelAccess(perms: Readonly<PermissionsBitField> | null, thread: boolean): ChannelAccess {
+  const send = thread ? PermissionFlagsBits.SendMessagesInThreads : PermissionFlagsBits.SendMessages;
+  return {
+    read: perms?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory]) ?? false,
+    post: perms?.has([PermissionFlagsBits.ViewChannel, send]) ?? false
+  };
+}
+
+/** Without the GuildMembers intent the cache never hears about role changes, kicks or bans. */
+async function freshMember(guild: Guild, userId: string): Promise<GuildMember | null> {
+  try {
+    return await guild.members.fetch({ user: userId, force: true });
+  } catch (error) {
+    if (error instanceof DiscordAPIError && error.code === RESTJSONErrorCodes.UnknownMember) return null;
+    throw error;
+  }
 }
 
 function attachments(files: Collection<string, DiscordAttachment> | DiscordAttachment[]): Attachment[] {

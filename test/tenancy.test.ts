@@ -226,7 +226,7 @@ test('every trigger in an unconfigured server gets the setup link', async () => 
     await t.bot.startFromMessage(G, admin, channel, message),
     await t.bot.startFromPrompt(G, admin, channel, 'Do a thing', []),
     await t.bot.status(G, admin, 'thread-1'),
-    t.bot.list(G, admin)
+    await t.bot.list(G, admin, async () => true)
   ];
   for (const outcome of outcomes) assert.deepEqual(outcome, { ok: false, reason: 'unconfigured', reply: expected });
   assert.equal(t.started.length, 0);
@@ -241,7 +241,7 @@ test('triggers are gated by role permissions, channels and limits', async () => 
 
   const denied = await t.bot.startFromMessage(G, nobody, channel, message);
   assert.equal(denied.ok === false && denied.reason, 'forbidden');
-  assert.equal(t.bot.list(G, nobody).ok, false);
+  assert.equal((await t.bot.list(G, nobody, async () => true)).ok, false);
 
   const first = await t.bot.startFromPrompt(G, helper, channel, 'one', []);
   assert.equal(first.ok && first.started, true);
@@ -262,6 +262,34 @@ test('triggers are gated by role permissions, channels and limits', async () => 
   const wrongChannel = await t.bot.startFromPrompt(G, mod, channel, 'x', []);
   assert.equal(wrongChannel.ok === false && wrongChannel.reason, 'channel');
   assert.equal((await t.bot.startFromPrompt(G, mod, { id: 'thread-x', parentId: 'c2' }, 'x', [])).ok, true);
+});
+
+test('/devin list only shows tasks in threads the member can see', async () => {
+  const t = botSetup();
+  t.configure();
+  const mod = member({ id: '3', roleIds: [G, MOD] });
+  const helper = member({ id: '2', roleIds: [G, HELPER] });
+  await t.bot.startFromPrompt(G, mod, { id: 'staff', parentId: null }, 'secret', []);
+  t.tasks.update('task-1', { pullRequests: ['https://github.com/acme/private/pull/7'], stateLabel: 'working' });
+  await t.bot.startFromPrompt(G, helper, channel, 'public', []);
+  const visible = new Set(['thread-2']);
+  const asked: string[] = [];
+  const canView = async (threadId: string) => {
+    asked.push(threadId);
+    return visible.has(threadId);
+  };
+
+  const helperList = await t.bot.list(G, helper, canView);
+  assert.equal(helperList.ok, true);
+  assert.match(helperList.reply, /<#thread-2>/);
+  assert.doesNotMatch(helperList.reply, /thread-1|acme\/private|working/);
+  assert.deepEqual(asked.sort(), ['thread-1', 'thread-2']);
+
+  const modList = await t.bot.list(G, mod, canView);
+  assert.doesNotMatch(modList.reply, /acme\/private/, 'manage_tasks does not bypass Discord visibility');
+
+  const none = await t.bot.list(G, helper, async () => false);
+  assert.deepEqual(none, { ok: true, reply: 'No tasks you can see yet.' });
 });
 
 test('thread replies need reply, manage_tasks, or being the opener', async () => {
@@ -315,7 +343,7 @@ test('an @mention starts a task with the mention stripped and channel context', 
   assert.deepEqual(t.threadsOnMessage.map((x) => x.messageId), ['m-start']);
   assert.match(t.started[0].prompt, /\n\nfix the login page\n/);
   assert.doesNotMatch(t.started[0].prompt, new RegExp(BOT));
-  assert.match(t.started[0].prompt, /UNTRUSTED[\s\S]*<untrusted_discord_context>[\s\S]*earlier/);
+  assert.match(t.started[0].prompt, /UNTRUSTED[\s\S]*<untrusted_discord_context_\w+>[\s\S]*earlier/);
   assert.equal(t.guilds.auditLog(G)[0].action, 'task.start');
 
   t.guilds.setMentionSettings(G, 3, false);

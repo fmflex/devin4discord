@@ -1,9 +1,10 @@
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { deleteCookie, getSignedCookie, setSignedCookie } from 'hono/cookie';
 import { secureHeaders } from 'hono/secure-headers';
 import { randomToken, safeEqual, type Secrets } from '../crypto.ts';
 import { DEVIN_USER_ID, verifyDevinCredentials, verifyDevinOrgUser } from '../devin.ts';
-import { newMcpToken } from '../mcp.ts';
+import { MAX_BODY_BYTES as MAX_MCP_BODY_BYTES, newMcpToken } from '../mcp.ts';
 import type { Directory } from '../directory.ts';
 import { DEFAULT_CONTEXT_MESSAGES, MAX_CONTEXT_MESSAGES, type Actor, type GuildStore } from '../guilds.ts';
 import {
@@ -45,6 +46,8 @@ import {
 
 export const SESSION_COOKIE = 'd4d_session';
 export const STATE_COOKIE = 'd4d_oauth_state';
+/** Every setup form is a few fields of text; anything bigger is rejected before it is read in full. */
+export const MAX_FORM_BYTES = 64 * 1024;
 
 export type WebDeps = {
   publicUrl: string;
@@ -176,8 +179,14 @@ export function createWebApp(deps: WebDeps) {
   );
 
   // Bearer-token API for Devin; registered before the cookie session and CSRF checks, which it doesn't use.
-  app.on(['GET', 'POST', 'DELETE'], '/mcp', (c) =>
-    deps.mcp ? deps.mcp(c.req.raw) : c.json({ error: 'MCP is not available.' }, 404)
+  app.on(
+    ['GET', 'POST', 'DELETE'],
+    '/mcp',
+    bodyLimit({
+      maxSize: MAX_MCP_BODY_BYTES,
+      onError: (c) => c.json({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Request too large.' } }, 413)
+    }),
+    (c) => (deps.mcp ? deps.mcp(c.req.raw) : c.json({ error: 'MCP is not available.' }, 404))
   );
 
   app.use(async (c, next) => {
@@ -195,20 +204,26 @@ export function createWebApp(deps: WebDeps) {
   });
 
   // CSRF: every POST needs the session's token, and a same-origin Origin header when one is sent.
+  // The session and Origin are checked before the body is read, and the body is size-capped before it is parsed.
+  const rejectForm = (c: Context<Env>) =>
+    c.html(errorPage(c.get('session'), 'Request rejected', 'The form expired or came from another site. Reload the page and try again.'), 403);
+  const formLimit = bodyLimit({
+    maxSize: MAX_FORM_BYTES,
+    onError: (c) => c.html(errorPage(c.get('session'), 'Request too large', 'That form was too big to accept.'), 413)
+  });
+  app.use(async (c, next) => {
+    if (c.req.method !== 'POST') return next();
+    const origin = c.req.header('origin');
+    if (!c.get('session') || (origin && origin !== deps.publicUrl)) return rejectForm(c);
+    return next();
+  });
+  app.use((c, next) => (c.req.method === 'POST' ? formLimit(c, next) : next()));
   app.use(async (c, next) => {
     if (c.req.method !== 'POST') return next();
     const session = c.get('session');
-    const origin = c.req.header('origin');
     const form = (await c.req.parseBody({ all: true })) as Form;
     const token = field(form, '_csrf');
-    if (
-      !session ||
-      (origin && origin !== deps.publicUrl) ||
-      !token ||
-      !safeEqual(token, session.csrfToken)
-    ) {
-      return c.html(errorPage(session, 'Request rejected', 'The form expired or came from another site. Reload the page and try again.'), 403);
-    }
+    if (!session || !token || !safeEqual(token, session.csrfToken)) return rejectForm(c);
     return next();
   });
 

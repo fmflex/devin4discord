@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DevinClient, devinState, verifyDevinCredentials } from '../src/devin.ts';
+import { DevinClient, devinState, verifyDevinCredentials, verifyDevinOrgUser } from '../src/devin.ts';
 
 type Call = { url: string; method: string; body: unknown; auth: string | null };
 
@@ -148,4 +148,15 @@ test('stop terminates and sleep archives the session with the documented v3 call
     [`DELETE ${base}/sessions/devin-abc`, `POST ${base}/sessions/devin-abc/archive`, `POST ${base}/sessions/devin-abc/unarchive`]
   );
   assert.ok(calls.every((call) => call.auth === 'Bearer cog_test' && call.body === undefined));
+});
+
+test('verifyDevinOrgUser looks the user up in the org and explains failures', async () => {
+  const input = { apiKey: 'cog_test', orgId: 'org-1', baseUrl: 'https://devin.test', userId: 'user-a' };
+  const ok = fakeFetch({ 'GET /v3beta1/organizations/org-1/members/users/user-a': { user_id: 'user-a' } });
+  await verifyDevinOrgUser(input, ok.impl);
+  assert.equal(ok.calls[0].url, 'https://devin.test/v3beta1/organizations/org-1/members/users/user-a');
+  assert.equal(ok.calls[0].auth, 'Bearer cog_test');
+  await assert.rejects(verifyDevinOrgUser(input, fakeFetch({}).impl), /user-a isn't a user in organization org-1/);
+  const forbidden = (async () => new Response('{}', { status: 403 })) as typeof fetch;
+  await assert.rejects(verifyDevinOrgUser(input, forbidden), /ViewOrgMembership/);
 });

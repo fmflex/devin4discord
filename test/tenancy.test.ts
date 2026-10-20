@@ -4,11 +4,12 @@ import { test } from 'node:test';
 import { PermissionsBitField } from 'discord.js';
 import { Bot, unconfiguredReply } from '../src/bot.ts';
 import { Bridge, type ChatPort } from '../src/bridge.ts';
-import { Secrets } from '../src/crypto.ts';
+import { Secrets, sha256 } from '../src/crypto.ts';
 import { discordDirectory } from '../src/discord.ts';
 import { MIGRATIONS, SCHEMA_VERSION, migrate, openDatabase } from '../src/db.ts';
 import type { DevinApi, StartTaskInput } from '../src/devin.ts';
 import { GuildStore } from '../src/guilds.ts';
+import { newMcpToken } from '../src/mcp.ts';
 import {
   NO_LIMITS,
   ADMIN_ROLE,
@@ -522,4 +523,33 @@ test('the setup UI asks Discord for the member instead of trusting the cache', a
   const member = await discordDirectory(client as never).member(guild.id, '42');
   assert.deepEqual(calls, [{ user: '42', force: true }]);
   assert.deepEqual(member, { id: '42', name: 'Ex-mod', roleIds: [guild.id], isAdmin: false, canManageGuild: false });
+});
+
+test('/devin list hides a task when the visibility check fails', async () => {
+  const t = botSetup();
+  t.configure();
+  const admin = member({ isAdmin: true });
+  await t.bot.startFromPrompt(G, admin, channel, 'staff task', []);
+  const none = await t.bot.list(G, admin, async () => {
+    throw new Error('Missing Access');
+  });
+  assert.deepEqual(none, { ok: true, reply: 'No tasks you can see yet.' });
+});
+
+test('with an MCP token, each task gets its own MCP task key in the prompt', async () => {
+  const t = botSetup();
+  t.configure();
+  const admin = member({ isAdmin: true });
+  await t.bot.startFromPrompt(G, admin, channel, 'no mcp', []);
+  assert.doesNotMatch(t.started[0].prompt, /task key/i);
+
+  const token = newMcpToken();
+  t.guilds.setMcpToken(G, token.hash, token.hint, '1');
+  await t.bot.startFromPrompt(G, admin, channel, 'one', []);
+  await t.bot.startFromPrompt(G, admin, channel, 'two', []);
+  const keys = t.started.slice(1).map((s) => /Discord MCP task key: (d4dt_\S+)/.exec(s.prompt)?.[1]);
+  assert.ok(keys[0] && keys[1] && keys[0] !== keys[1]);
+  const owners = keys.map((key) => t.tasks.byMcpKey(sha256(key!))?.title);
+  assert.deepEqual(owners, ['one', 'two']);
+  assert.equal(t.tasks.byMcpKey(sha256(token.token)), null);
 });

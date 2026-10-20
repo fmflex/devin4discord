@@ -119,8 +119,11 @@ export const MIGRATIONS: string[] = [
      primary key (guild_id, channel_id)
    );`,
 
-  // 7: the member whose Discord access bounds the MCP token, backfilled from the
-  // audit log. An empty MCP read list now means no channels, not the Channels tab.
+  // 7: per-task MCP key (hash only), so task-thread tools reach only the session they were handed to.
+  `alter table tasks add column mcp_key_hash text;
+   create unique index tasks_mcp_key_idx on tasks (mcp_key_hash);`,
+
+  // 8: the member whose Discord access bounds the MCP token, backfilled from the audit log.
   `alter table guild_mcp add column created_by text;
    update guild_mcp set created_by = (
      select actor_id from audit_log

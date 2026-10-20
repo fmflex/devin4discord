@@ -151,7 +151,8 @@ export function devinPage(
   session: WebSession,
   guild: { id: string; name: string },
   form: DevinForm,
-  notice: PageOptions['notice']
+  notice: PageOptions['notice'],
+  canEditUserMap: boolean
 ) {
   return layout({
     title: `${guild.name} · Devin`,
@@ -163,7 +164,7 @@ export function devinPage(
       <h2>Devin connection</h2>
       <p class="muted">Use a service user key (Devin → Settings → Devin API → Service users) with permission to create, view and message sessions. Tasks are created by this service user.</p>
       <label>API key ${help('the API key', html`<p>A Devin <strong>service user</strong> key, starting with <code>cog_</code>. In Devin, open <strong>Settings → Devin API → Service users</strong>, create one and copy the key. Devin shows it only once.</p>
-        <p>Give its role <code>UseDevinSessions</code>, <code>ViewOrgSessions</code> and <code>ManageOrgSessions</code>, plus <code>ImpersonateOrgSessions</code> if you use "Run as Devin users".</p>
+        <p>Give its role <code>UseDevinSessions</code>, <code>ViewOrgSessions</code> and <code>ManageOrgSessions</code>, plus <code>ImpersonateOrgSessions</code> and <code>ViewOrgMembership</code> if you use "Run as Devin users".</p>
         <p>It's checked with read-only calls before saving and stored encrypted.</p>
         <p>${doc(DOCS.serviceUsers, 'Devin docs: service users')} · ${doc(DOCS.permissions, 'API permissions')}</p>`)}
         <input type="password" name="api_key" autocomplete="off" spellcheck="false"
@@ -183,10 +184,12 @@ export function devinPage(
       <label>Run as Devin users <span class="muted">(optional, one per line: Discord user ID, space, Devin user ID)</span> ${help('running as Devin users', html`<p>By default every task is created by the service user. List a Discord member here with their Devin user ID (<code>user-…</code>), and tasks they start and replies they send are made as that Devin user.</p>
         <p>Example: <code>123456789012345678 user-0123abcd…</code></p>
         <p>To copy a Discord user ID, turn on Developer Mode in Discord (User Settings → Advanced), then right-click the member → Copy User ID.</p>
-        <p>Needs <code>ImpersonateOrgSessions</code> on the service user. The Devin user must be in the organization and allowed to use Devin.</p>
+        <p>Only Discord Administrators can change this list. Each Devin user is checked to be in the organization before saving, and every change is written to the audit log.</p>
+        <p>Needs <code>ImpersonateOrgSessions</code> and <code>ViewOrgMembership</code> on the service user. The Devin user must be in the organization and allowed to use Devin.</p>
         <p>${doc(DOCS.discordIds, 'Discord: finding IDs')} · ${doc(DOCS.createSession, 'Devin docs: create_as_user_id')}</p>`)}
-        <textarea name="user_map" rows="3" spellcheck="false">${form.userMap}</textarea>
+        <textarea name="user_map" rows="3" spellcheck="false"${canEditUserMap ? '' : ' readonly'}>${form.userMap}</textarea>
       </label>
+      ${canEditUserMap ? '' : html`<p class="muted small">Only Discord Administrators can change who runs as which Devin user.</p>`}
       <label>Extra instructions <span class="muted">(added to every task; a default is used when empty)</span> ${help('extra instructions', html`<p>Added to the prompt of every task from this server, for example your conventions or "open PRs as drafts".</p>
         <p>When empty, this default is used: <em>${DEFAULT_INSTRUCTIONS}</em></p>`)}
         <textarea name="instructions" rows="3">${form.instructions}</textarea>
@@ -334,7 +337,7 @@ export function mcpPage(
   session: WebSession,
   guild: { id: string; name: string },
   url: string,
-  settings: { channels: ChannelInfo[]; read: string[]; post: string[] },
+  settings: { channels: ChannelInfo[]; read: string[]; post: string[]; allowed: string[] },
   token: { hint: string; createdAt: number; createdBy: string | null } | null,
   newToken: string | null,
   notice: PageOptions['notice']
@@ -342,14 +345,18 @@ export function mcpPage(
   const created = token ? new Date(token.createdAt).toISOString().slice(0, 10) : '';
   const readSet = new Set(settings.read);
   const postSet = new Set(settings.post);
+  const allowedSet = new Set(settings.allowed);
   const groups = new Map<string, ChannelInfo[]>();
   for (const channel of [...settings.channels].sort((a, b) => a.position - b.position)) {
     const key = channel.category ?? 'No category';
     groups.set(key, [...(groups.get(key) ?? []), channel]);
   }
+  const inheritedChannels = settings.channels
+    .filter((channel) => allowedSet.has(channel.id))
+    .map((channel) => `#${channel.name}`);
   const readSummary = settings.read.length
     ? 'Reading: only the ticked channels.'
-    : 'Reading: none ticked, so Devin can only read its own task threads.';
+    : `Reading: none ticked, so it follows the Channels tab: ${settings.allowed.length ? inheritedChannels.join(', ') : 'channels @everyone can see'}.`;
   const hasBotPermissionLimits = settings.channels.some(
     (channel) => channel.bot?.read === false || channel.bot?.post === false
   );
@@ -367,8 +374,8 @@ export function mcpPage(
       <label>Server URL ${help('the server URL', html`<p>Paste this as the URL of a custom MCP server in Devin, with transport <strong>HTTP</strong>.</p><p>It comes from <code>PUBLIC_URL</code>. On a Cloudflare quick tunnel it changes whenever the tunnel restarts, so update it in Devin when that happens.</p>`)}
         <input readonly value="${url}" spellcheck="false">
       </label>
-      <label>Token ${help('the token', html`<p>A bearer token that identifies this server. Anyone with it can read the selected MCP channels and post in selected MCP channels, so keep it in Devin only.</p><p>Outside task threads it acts with the Discord access of the member who generated it, checked on every call: Devin can only read or post where that member can, and loses that when they do.</p><p>Generating a new one stops the old one at once.</p>`)}</label>
-      <p class="muted small">${token ? html`Token is <strong>set, ends in …${token.hint}</strong>, created ${created}.` : 'No token yet. Generate one to turn the MCP server on.'} Devin reads and posts outside its task threads only where the member who generates the token can on Discord.</p>
+      <label>Token ${help('the token', html`<p>A bearer token that identifies this server. Anyone with it can read the selected MCP channels (or the Channels tab's Allowed list when none are ticked, and channels @everyone can see when that's empty too) and post in selected MCP channels, so keep it in Devin only.</p><p>Task threads need more than the token: each task's session gets its own task key in its prompt.</p><p>Outside task threads it also acts with the Discord access of the member who generated it, checked on every call: Devin can only read or post where that member can, and loses that when they do.</p><p>Generating a new one stops the old one at once.</p>`)}</label>
+      <p class="muted small">${token ? html`Token is <strong>set, ends in …${token.hint}</strong>, created ${created}.` : 'No token yet. Generate one to turn the MCP server on.'} Outside task threads, Devin reads and posts only where the member who generates the token can on Discord.</p>
       ${token && !token.createdBy
         ? html`<div class="notice error">This token has no recorded creator, so it only reaches task threads. Generate a new one.</div>`
         : ''}
@@ -383,14 +390,14 @@ export function mcpPage(
       <p class="muted small">${doc(DOCS.mcp, 'Devin docs: custom MCP servers')}</p>
       <h3>Tools</h3>
       <ul class="steps">${MCP_TOOLS.map(([name, text]) => html`<li><code>${name}</code>: ${text}</li>`)}</ul>
-      <p class="muted small">The task-thread tools take the Devin session ID, so a session can only use the thread of a task started from this server. Stopped tasks can't post.</p>
+      <p class="muted small">The task-thread tools take a task key that only that task's Devin session gets in its prompt, so a session can only use its own thread. Tasks started before the token was generated have no key. Stopped tasks can't post.</p>
       <h3>Channels</h3>
       <form method="post" action="/g/${guild.id}/mcp/channels">
         ${csrfField(session)}
         <table class="grid">
           <thead><tr>
             <th>Channel</th>
-            <th>Read ${help('MCP read channels', html`<p>Channels Devin may read through MCP (<code>list_channels</code>, <code>read_channel</code>, <code>get_message</code>), and the threads inside them. Its own task threads are always readable.</p><p>With none ticked, Devin can only read its own task threads.</p><p>You can only change channels you can read yourself on Discord (or post in, for Post); the others keep their saved setting.</p><p>The bot's own Discord permissions come first: where its role can't see the channel (or send messages, for Post), nothing gets through, ticked or not.</p><p>${doc('https://support.discord.com/hc/en-us/articles/206141927-How-is-the-permission-hierarchy-structured', 'Discord permission hierarchy')}</p>`)}</th>
+            <th>Read ${help('MCP read channels', html`<p>Channels Devin may read through MCP (<code>list_channels</code>, <code>read_channel</code>, <code>get_message</code>), and the public threads inside them. Private threads are never readable. Devin reads its own task thread with <code>read_task_thread</code>, using a key only that task's session gets; it can't open other task threads unless their channel is ticked.</p><p>With none ticked, it follows the Allowed list on the Channels tab. When that's empty too, it can only read channels <strong>@everyone</strong> can see.</p><p>You can only change channels you can read yourself on Discord (or post in, for Post); the others keep their saved setting.</p><p>The bot's own Discord permissions come first: where its role can't see the channel (or send messages, for Post), nothing gets through, ticked or not.</p><p>${doc('https://support.discord.com/hc/en-us/articles/206141927-How-is-the-permission-hierarchy-structured', 'Discord permission hierarchy')}</p>`)}</th>
             <th>Post ${help('MCP posting channels', html`<p><code>post_to_channel</code> only posts in the ticked channels and threads under them.</p><p>Nobody is pinged. With none ticked, Devin can only post in its own task threads.</p><p>Anyone with the token can post there, so only tick channels where that's OK.</p><p>The bot's own Discord permissions come first: where its role can't see the channel (or send messages, for Post), nothing gets through, ticked or not.</p><p>${doc('https://support.discord.com/hc/en-us/articles/206141927-How-is-the-permission-hierarchy-structured', 'Discord permission hierarchy')}</p>`, true)}</th>
           </tr></thead>
           <tbody>

@@ -61,7 +61,7 @@ function fromRaw(raw: Raw): TaskRow {
 export type NewTask = Pick<
   TaskRow,
   'taskId' | 'threadId' | 'sourceMessageId' | 'openerId' | 'title' | 'url'
-> & { guildId: string };
+> & { guildId: string; mcpKeyHash?: string | null };
 
 export type TaskPatch = Partial<
   Pick<TaskRow, 'stateLabel' | 'cursor' | 'pullRequests' | 'active' | 'guildId' | 'stoppedBy' | 'sleptBy'>
@@ -79,8 +79,8 @@ export class TaskStore {
     const now = Date.now();
     this.db
       .prepare(
-        `insert into tasks (task_id, agent, guild_id, thread_id, source_message_id, opener_id, title, url, created_at, updated_at)
-         values (?, 'devin', ?, ?, ?, ?, ?, ?, ?, ?)`
+        `insert into tasks (task_id, agent, guild_id, thread_id, source_message_id, opener_id, title, url, mcp_key_hash, created_at, updated_at)
+         values (?, 'devin', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         task.taskId,
@@ -90,6 +90,7 @@ export class TaskStore {
         task.openerId,
         task.title,
         task.url,
+        task.mcpKeyHash ?? null,
         now,
         now
       );
@@ -102,6 +103,12 @@ export class TaskStore {
 
   byThread(threadId: string): TaskRow | null {
     const raw = this.db.prepare('select * from tasks where thread_id = ?').get(threadId);
+    return raw ? fromRaw(raw as Raw) : null;
+  }
+
+  /** The task whose session was given this MCP task key (by hash). */
+  byMcpKey(keyHash: string): TaskRow | null {
+    const raw = this.db.prepare('select * from tasks where mcp_key_hash = ?').get(keyHash);
     return raw ? fromRaw(raw as Raw) : null;
   }
 

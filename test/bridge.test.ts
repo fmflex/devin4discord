@@ -5,7 +5,7 @@ import { openDatabase } from '../src/db.ts';
 import type { DevinApi, StartTaskInput, TaskUpdate } from '../src/devin.ts';
 import { TaskStore } from '../src/store.ts';
 
-type Sent = { channelId: string; content: string; ping?: string; buttons?: string[] };
+type Sent = { channelId: string; content: string; ping?: string; buttons?: string[]; files?: string[] };
 
 function setup() {
   const sent: Sent[] = [];
@@ -34,8 +34,14 @@ function setup() {
     async threadExists(threadId) {
       return !deleted.has(threadId);
     },
-    async send(channelId, content, ping, buttons) {
-      sent.push({ channelId, content, ...(ping ? { ping } : {}), ...(buttons ? { buttons: buttons.map((b) => b.customId) } : {}) });
+    async send(channelId, content, ping, buttons, files) {
+      sent.push({
+        channelId,
+        content,
+        ...(ping ? { ping } : {}),
+        ...(buttons ? { buttons: buttons.map((b) => b.customId) } : {}),
+        ...(files ? { files: files.map((f) => `${f.name}:${new TextDecoder().decode(f.data)}`) } : {})
+      });
     }
   };
   const devin: DevinApi = {
@@ -55,6 +61,10 @@ function setup() {
     },
     async unarchive(taskId) {
       controls.push(`unarchive ${taskId}`);
+    },
+    async downloadAttachment(file) {
+      if (file.uuid === 'broken') throw new Error('403');
+      return { name: file.name, data: new TextEncoder().encode(`bytes of ${file.uuid}`) };
     },
     async getUpdate(taskId) {
       const update = updates.get(taskId);
@@ -133,7 +143,7 @@ test('sync relays messages without pings, pings on PRs and waiting, and never re
     update({
       state: 'waiting',
       stateLabel: 'waiting for a reply',
-      messages: [{ id: 'e1', text: 'Which theme?' }],
+      messages: [{ id: 'e1', text: 'Which theme?', files: [] }],
       cursor: 'e1',
       pullRequests: ['https://github.com/acme/app/pull/7']
     })
@@ -184,7 +194,7 @@ test('one failing task does not stop the others from syncing', async () => {
   await t.bridge.start({ kind: 'prompt', ...base, channelId: 'chan', task: 'b', attachments: [] });
   t.sent.length = 0;
   t.updates.set('task-1', new Error('boom'));
-  t.updates.set('task-2', update({ messages: [{ id: 'e1', text: 'hello' }], cursor: 'e1' }));
+  t.updates.set('task-2', update({ messages: [{ id: 'e1', text: 'hello', files: [] }], cursor: 'e1' }));
   const originalError = console.error;
   console.error = () => {};
   try {
@@ -281,4 +291,70 @@ test('a task from a private thread asks for a private task thread', async () => 
   assert.equal(t.threads[0].private, true);
   await t.bridge.start({ kind: 'prompt', ...base, channelId: 'chan', task: 'public', attachments: [] });
   assert.equal(t.threads[1].private, undefined);
+});
+
+test('sync uploads the files Devin attached and links the session for ones it cannot fetch', async () => {
+  const t = setup();
+  await t.bridge.start({ kind: 'prompt', ...base, channelId: 'chan', task: 'Chart it', attachments: [] });
+  t.sent.length = 0;
+  t.updates.set(
+    'task-1',
+    update({
+      messages: [
+        {
+          id: 'e1',
+          text: 'Here is the chart.',
+          files: [
+            { uuid: 'u1', name: 'chart.png' },
+            { uuid: 'broken', name: 'big.csv' }
+          ]
+        },
+        { id: 'e2', text: '', files: [{ uuid: 'u2', name: 'only.png' }] }
+      ],
+      cursor: 'e2'
+    })
+  );
+  await t.bridge.syncAll();
+  assert.deepEqual(t.sent, [
+    {
+      channelId: 'thread-1',
+      content: "**Devin:** Here is the chart.\n\n_Couldn't upload `big.csv`; see https://agent.test/task-1_",
+      files: ['chart.png:bytes of u1']
+    },
+    { channelId: 'thread-1', content: '**Devin:**', files: ['only.png:bytes of u2'] }
+  ]);
+});
+
+test('a PR Devin links in its message pings on that message instead of a second post', async () => {
+  const t = setup();
+  await t.bridge.start({ kind: 'prompt', ...base, channelId: 'chan', task: 'Fix it', attachments: [] });
+  t.sent.length = 0;
+  t.updates.set(
+    'task-1',
+    update({
+      messages: [{ id: 'e1', text: 'Fixed in https://github.com/acme/app/pull/7.', files: [] }],
+      cursor: 'e1',
+      pullRequests: ['https://github.com/acme/app/pull/7', 'https://github.com/acme/app/pull/8']
+    })
+  );
+  await t.bridge.syncAll();
+  assert.deepEqual(t.sent, [
+    { channelId: 'thread-1', content: '<@10> **Devin:** Fixed in https://github.com/acme/app/pull/7.', ping: '10' },
+    { channelId: 'thread-1', content: '<@10> **Pull request:** https://github.com/acme/app/pull/8', ping: '10' }
+  ]);
+  assert.deepEqual(t.store.byThread('thread-1')?.pullRequests, [
+    'https://github.com/acme/app/pull/7',
+    'https://github.com/acme/app/pull/8'
+  ]);
+  t.sent.length = 0;
+  t.updates.set(
+    'task-1',
+    update({
+      messages: [{ id: 'e2', text: 'Still https://github.com/acme/app/pull/7', files: [] }],
+      cursor: 'e2',
+      pullRequests: ['https://github.com/acme/app/pull/7', 'https://github.com/acme/app/pull/8']
+    })
+  );
+  await t.bridge.syncAll();
+  assert.deepEqual(t.sent, [{ channelId: 'thread-1', content: '**Devin:** Still https://github.com/acme/app/pull/7' }]);
 });

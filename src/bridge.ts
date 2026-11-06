@@ -1,5 +1,5 @@
 import { randomToken, sha256 } from './crypto.ts';
-import type { Attachment, DevinApi, Person } from './devin.ts';
+import type { AgentMessage, Attachment, DevinApi, DownloadedFile, Person } from './devin.ts';
 import {
   MCP_TASK_KEY_PREFIX,
   chunkMessage,
@@ -30,8 +30,14 @@ export interface ChatPort {
   addThreadMember(threadId: string, userId: string): Promise<void>;
   /** False only when Discord says the thread no longer exists (e.g. it was deleted). */
   threadExists(threadId: string): Promise<boolean>;
-  /** Posts one message; mentions are only allowed for `pingUserId`. */
-  send(channelId: string, content: string, pingUserId?: string, buttons?: ChatButton[]): Promise<void>;
+  /** Posts one message, with `files` uploaded on it; mentions are only allowed for `pingUserId`. */
+  send(
+    channelId: string,
+    content: string,
+    pingUserId?: string,
+    buttons?: ChatButton[],
+    files?: DownloadedFile[]
+  ): Promise<void>;
 }
 
 export type StartRequest = {
@@ -257,12 +263,18 @@ export class Bridge {
     this.syncing.add(row.taskId);
     try {
       const update = await devin.getUpdate(row.taskId, row.cursor);
-      for (const message of update.messages) {
-        await this.post(row.threadId, `**Devin:** ${message.text}`);
-        this.store.update(row.taskId, { cursor: message.id });
-      }
       const known = new Set(row.pullRequests);
       const pullRequests = [...row.pullRequests];
+      for (const message of update.messages) {
+        // A new PR Devin links in its own message is announced by pinging on that message.
+        const linked = update.pullRequests.filter((url) => !known.has(url) && message.text.includes(url));
+        await this.relay(devin, row, message, linked.length ? row.openerId : undefined);
+        for (const url of linked) {
+          known.add(url);
+          pullRequests.push(url);
+        }
+        this.store.update(row.taskId, { cursor: message.id, ...(linked.length ? { pullRequests } : {}) });
+      }
       for (const url of update.pullRequests) {
         if (known.has(url)) continue;
         await this.post(row.threadId, `**Pull request:** ${url}`, row.openerId);
@@ -290,7 +302,32 @@ export class Bridge {
     }
   }
 
-  private async post(channelId: string, content: string, pingUserId?: string, buttons?: ChatButton[]) {
+  /** Posts a Devin message with its attached files uploaded to Discord. */
+  private async relay(devin: DevinApi, row: TaskRow, message: AgentMessage, pingUserId?: string) {
+    const files: DownloadedFile[] = [];
+    const missing: string[] = [];
+    for (const file of message.files) {
+      try {
+        files.push(await devin.downloadAttachment(file));
+      } catch (error) {
+        console.error(`Downloading attachment ${file.name} of task ${row.taskId} failed:`, error);
+        missing.push(file.name);
+      }
+    }
+    const lines = [message.text ? `**Devin:** ${message.text}` : '**Devin:**'];
+    if (missing.length) {
+      lines.push(`_Couldn't upload ${missing.map((name) => `\`${name}\``).join(', ')}; see ${row.url}_`);
+    }
+    await this.post(row.threadId, lines.join('\n\n'), pingUserId, undefined, files);
+  }
+
+  private async post(
+    channelId: string,
+    content: string,
+    pingUserId?: string,
+    buttons?: ChatButton[],
+    files?: DownloadedFile[]
+  ) {
     const chunks = chunkMessage(pingUserId ? `<@${pingUserId}> ${content}` : content);
     for (let index = 0; index < chunks.length; index++) {
       const last = index === chunks.length - 1;
@@ -298,7 +335,8 @@ export class Bridge {
         channelId,
         chunks[index],
         index === 0 ? pingUserId : undefined,
-        last ? buttons : undefined
+        last ? buttons : undefined,
+        last && files?.length ? files : undefined
       );
     }
   }

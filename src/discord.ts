@@ -1,5 +1,6 @@
 import {
   ActionRowBuilder,
+  AttachmentBuilder,
   ApplicationCommandType,
   ButtonBuilder,
   ButtonStyle,
@@ -125,13 +126,14 @@ export function discordChat(client: Client): ChatPort {
       if (channel.isThread()) await channel.members.add(userId);
     },
 
-    async send(channelId, content, pingUserId, buttons) {
+    async send(channelId, content, pingUserId, buttons, files) {
       const channel = await fetchChannel(channelId);
       if (!channel.isSendable()) throw new Error(`Cannot send to channel ${channelId}.`);
       await channel.send({
         content,
         allowedMentions: pingUserId ? { parse: [], users: [pingUserId] } : { parse: [] },
-        components: buttons?.length ? [buttonRow(buttons)] : []
+        components: buttons?.length ? [buttonRow(buttons)] : [],
+        files: (files ?? []).map((file) => new AttachmentBuilder(Buffer.from(file.data), { name: file.name }))
       });
     }
   };

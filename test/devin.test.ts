@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DevinClient, devinState, verifyDevinCredentials, verifyDevinOrgUser } from '../src/devin.ts';
+import { DevinClient, devinState, parseAgentMessage, verifyDevinCredentials, verifyDevinOrgUser } from '../src/devin.ts';
 
 type Call = { url: string; method: string; body: unknown; auth: string | null };
 
@@ -96,10 +96,53 @@ test('getUpdate returns only new Devin messages and advances the cursor past use
   assert.deepEqual(update, {
     state: 'waiting',
     stateLabel: 'waiting for a reply',
-    messages: [{ id: 'e2', text: 'new one' }],
+    messages: [{ id: 'e2', text: 'new one', files: [] }],
     cursor: 'e4',
     pullRequests: ['https://github.com/acme/app/pull/1']
   });
+});
+
+test('parseAgentMessage moves Devin attachment lines out of the text', () => {
+  const message = [
+    'Here is the chart.',
+    '',
+    'ATTACHMENT:{"url":"https://app.devin.ai/attachments/de95-66/top%20specs.png","fileSize":10}',
+    'ATTACHMENT:{"url":"https://evil.test/not-an-attachment.png"}',
+    'ATTACHMENT:not json',
+    '  ATTACHMENT:{"url":"https://app.devin.ai/attachments/ab-12/data.csv"}'
+  ].join('\n');
+  assert.deepEqual(parseAgentMessage(message), {
+    text: 'Here is the chart.\n\nATTACHMENT:{"url":"https://evil.test/not-an-attachment.png"}\nATTACHMENT:not json',
+    files: [
+      { uuid: 'de95-66', name: 'top specs.png' },
+      { uuid: 'ab-12', name: 'data.csv' }
+    ]
+  });
+  assert.deepEqual(parseAgentMessage('no files'), { text: 'no files', files: [] });
+});
+
+test('downloadAttachment follows the redirect without sending the API key', async () => {
+  const calls: { url: string; auth: string | null; redirect?: string }[] = [];
+  const impl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, auth: new Headers(init?.headers).get('authorization'), redirect: init?.redirect });
+    if (url.startsWith('https://devin.test/')) {
+      return new Response(null, { status: 307, headers: { location: 'https://s3.test/obj?sig=1' } });
+    }
+    return new Response('PNGDATA', { status: 200 });
+  }) as typeof fetch;
+  const file = await adapter(impl).downloadAttachment({ uuid: 'de95-66', name: 'top specs.png' });
+  assert.equal(file.name, 'top specs.png');
+  assert.equal(new TextDecoder().decode(file.data), 'PNGDATA');
+  assert.deepEqual(calls, [
+    { url: `https://devin.test${base}/attachments/de95-66/top%20specs.png`, auth: 'Bearer cog_test', redirect: 'manual' },
+    { url: 'https://s3.test/obj?sig=1', auth: null, redirect: 'follow' }
+  ]);
+});
+
+test('downloadAttachment rejects failed downloads', async () => {
+  const impl = (async () => new Response('no', { status: 403 })) as typeof fetch;
+  await assert.rejects(adapter(impl).downloadAttachment({ uuid: 'x', name: 'a.png' }), /failed with 403/);
 });
 
 test('API errors include the status and detail', async () => {

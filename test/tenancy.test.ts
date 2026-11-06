@@ -168,6 +168,9 @@ function botSetup() {
     async getUpdate() {
       throw new Error('not used');
     },
+    async downloadAttachment() {
+      throw new Error('not used');
+    },
     async terminate(taskId) {
       controls.push(`terminate ${taskId}`);
     },

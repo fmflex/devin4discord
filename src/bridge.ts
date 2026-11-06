@@ -28,6 +28,8 @@ export interface ChatPort {
   /** Opens a thread on an existing message, e.g. the one that @mentioned the bot. */
   createThreadOnMessage(channelId: string, messageId: string, title: string): Promise<string>;
   addThreadMember(threadId: string, userId: string): Promise<void>;
+  /** False only when Discord says the thread no longer exists (e.g. it was deleted). */
+  threadExists(threadId: string): Promise<boolean>;
   /** Posts one message; mentions are only allowed for `pingUserId`. */
   send(channelId: string, content: string, pingUserId?: string, buttons?: ChatButton[]): Promise<void>;
 }
@@ -94,7 +96,7 @@ export class Bridge {
 
   async start(request: StartRequest): Promise<StartResult> {
     if (request.kind !== 'prompt') {
-      const existing = this.store.bySourceMessage(request.message.id);
+      const existing = await this.taskForMessage(request.message.id);
       if (existing) return { started: false, threadId: existing.threadId };
     }
     const devin = this.devin(request.guildId);
@@ -173,6 +175,14 @@ export class Bridge {
 
   task(threadId: string) {
     return this.store.byThread(threadId);
+  }
+
+  /** The task started from this message, unless its thread was deleted: then the message may start a new one. */
+  async taskForMessage(messageId: string): Promise<TaskRow | null> {
+    const row = this.store.bySourceMessage(messageId);
+    if (!row || (await this.chat.threadExists(row.threadId))) return row;
+    this.store.releaseSource(row.taskId);
+    return null;
   }
 
   /** Ends the Devin session for good; the thread gets no more syncs or replies. */

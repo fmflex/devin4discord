@@ -393,10 +393,10 @@ export function channelsPage(
 const MCP_TOOLS: [string, string][] = [
   ['read_task_thread', "read the task's thread"],
   ['post_to_task_thread', 'post in it, without pinging anyone'],
-  ['post_to_channel', 'post in the channels ticked below, without pinging anyone'],
+  ['post_to_channel', 'post in the channels ticked below (in a forum: start a post or reply in one), without pinging anyone'],
   ['add_reaction', 'react to messages in it'],
   ['list_channels', 'list the channels it may read and post in'],
-  ['read_channel', 'read a channel ticked under Read (or its threads)'],
+  ['read_channel', 'read a channel ticked under Read (or its threads); for a forum, list its posts'],
   ['get_message', 'read one message, e.g. from a link']
 ];
 
@@ -464,7 +464,7 @@ export function mcpPage(
           <thead><tr>
             <th>Channel</th>
             <th>Read ${help('MCP read channels', html`<p>Channels Devin may read through MCP (<code>list_channels</code>, <code>read_channel</code>, <code>get_message</code>), and the public threads inside them. Private threads are never readable. Devin reads its own task thread with <code>read_task_thread</code>, using a key only that task's session gets; it can't open other task threads unless their channel is ticked.</p><p>With none ticked, it follows the Allowed list on the Channels tab. When that's empty too, it can only read channels <strong>@everyone</strong> can see.</p><p>The bot's own Discord permissions come first: where its role can't see the channel (or send messages, for Post), nothing gets through, ticked or not.</p><p>${doc('https://support.discord.com/hc/en-us/articles/206141927-How-is-the-permission-hierarchy-structured', 'Discord permission hierarchy')}</p>`)}</th>
-            <th>Post ${help('MCP posting channels', html`<p><code>post_to_channel</code> only posts in the ticked channels and threads under them.</p><p>Nobody is pinged. With none ticked, Devin can only post in its own task threads.</p><p>Anyone with the token can post there, so only tick channels where that's OK.</p><p>The bot's own Discord permissions come first: where its role can't see the channel (or send messages, for Post), nothing gets through, ticked or not.</p><p>${doc('https://support.discord.com/hc/en-us/articles/206141927-How-is-the-permission-hierarchy-structured', 'Discord permission hierarchy')}</p>`, true)}</th>
+            <th>Post ${help('MCP posting channels', html`<p><code>post_to_channel</code> only posts in the ticked channels and threads under them. In a ticked forum it starts new posts and replies in existing ones.</p><p>Nobody is pinged. With none ticked, Devin can only post in its own task threads.</p><p>Anyone with the token can post there, so only tick channels where that's OK.</p><p>The bot's own Discord permissions come first: where its role can't see the channel (or send messages, for Post), nothing gets through, ticked or not.</p><p>${doc('https://support.discord.com/hc/en-us/articles/206141927-How-is-the-permission-hierarchy-structured', 'Discord permission hierarchy')}</p>`, true)}</th>
           </tr></thead>
           <tbody>
             ${[...groups].map(
@@ -473,9 +473,7 @@ export function mcpPage(
                   (channel) => html`<tr class="${channel.bot?.read === false || channel.bot?.post === false ? 'noaccess' : ''}">
                     <td>${channel.kind === 'text' ? html`<span class="muted">#</span> ` : ''}${channel.name}${channel.kind === 'text' ? '' : html` <span class="muted small">${KIND_LABEL[channel.kind]}</span>`}</td>
                     <td class="center"><input type="checkbox" name="read" value="${channel.id}" aria-label="Allow MCP reading in ${channel.name}" ${readSet.has(channel.id) ? 'checked' : ''}>${channel.bot?.read === false ? html`<br><span class="muted small">bot can't read here</span>` : ''}</td>
-                    <td class="center">${channel.kind === 'forum'
-                      ? html`<span class="muted small">n/a</span>`
-                      : html`<input type="checkbox" name="post" value="${channel.id}" aria-label="Allow MCP posting in ${channel.name}" ${postSet.has(channel.id) ? 'checked' : ''}>${channel.bot?.post === false ? html`<br><span class="muted small">bot can't post here</span>` : ''}`}</td>
+                    <td class="center"><input type="checkbox" name="post" value="${channel.id}" aria-label="Allow MCP posting in ${channel.name}" ${postSet.has(channel.id) ? 'checked' : ''}>${channel.bot?.post === false ? html`<br><span class="muted small">bot can't post here</span>` : ''}</td>
                   </tr>`
                 )}`
             )}

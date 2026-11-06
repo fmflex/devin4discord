@@ -136,9 +136,9 @@ const SECTIONS: Section[] = [
           <tr><td><code>post_to_task_thread</code></td><td>Post in it (not after the task is stopped)</td></tr>
           <tr><td><code>add_reaction</code></td><td>React to a message in it</td></tr>
           <tr><td><code>list_channels</code></td><td>List the channels it may read and post in</td></tr>
-          <tr><td><code>read_channel</code></td><td>Read a channel ticked under Read, or a public thread in it</td></tr>
+          <tr><td><code>read_channel</code></td><td>Read a channel ticked under Read, or a public thread in it; for a forum, list its posts</td></tr>
           <tr><td><code>get_message</code></td><td>Read one message, for example from a link</td></tr>
-          <tr><td><code>post_to_channel</code></td><td>Post in a channel ticked under Post</td></tr>
+          <tr><td><code>post_to_channel</code></td><td>Post in a channel ticked under Post; in a forum, start a post (with a title and tags) or reply in one</td></tr>
         </tbody>
       </table>
       <p><strong>What it can reach:</strong> the Read and Post lists on the MCP page. Read follows the Channels page's Allowed list when nothing is ticked (and only channels <code>@everyone</code> can see when that's empty too). Post is off until you tick something. Private threads are never readable or postable. Posts never ping anyone.</p>

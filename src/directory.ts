@@ -20,6 +20,9 @@ export type ChannelInfo = {
   public?: boolean;
   /** The bot's own Discord permissions here; absent when unknown. */
   bot?: { read: boolean; post: boolean };
+  /** Forums only: tag names, and whether a new post needs one. */
+  tags?: string[];
+  requireTag?: boolean;
 };
 
 /** Live server data read through the bot, so the UI never trusts the OAuth guild list alone. */

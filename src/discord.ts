@@ -3,6 +3,7 @@ import {
   ApplicationCommandType,
   ButtonBuilder,
   ButtonStyle,
+  ChannelFlags,
   ChannelType,
   Client,
   ContextMenuCommandBuilder,
@@ -16,10 +17,12 @@ import {
   RESTJSONErrorCodes,
   SlashCommandBuilder,
   ThreadAutoArchiveDuration,
+  type AnyThreadChannel,
   type Attachment as DiscordAttachment,
   type ButtonInteraction,
   type Channel,
   type ChatInputCommandInteraction,
+  type ForumChannel,
   type Collection,
   type GuildBasedChannel,
   type GuildMember,
@@ -28,7 +31,7 @@ import {
 } from 'discord.js';
 import type { Bot, ChannelRef, MessageOutcome, Outcome } from './bot.ts';
 import type { ChatButton, ChatPort } from './bridge.ts';
-import type { DiscordReader, ReadMessage } from './mcp.ts';
+import type { DiscordReader, ForumPost, ReadMessage } from './mcp.ts';
 import type { ForwardedMessage, MentionContext } from './format.ts';
 import type { Attachment } from './devin.ts';
 import type { ChannelInfo, Directory } from './directory.ts';
@@ -273,6 +276,7 @@ export function discordDirectory(client: Client): Directory {
           category: channel.parent?.name ?? null,
           position: channel.parent ? channel.parent.position * 1000 + channel.position : channel.position,
           public: everyoneCanView(channel),
+          ...(channel.type === ChannelType.GuildForum ? forumTags(channel) : {}),
           ...(me
             ? {
                 bot: {
@@ -530,6 +534,25 @@ function readMessage(message: Message): ReadMessage {
 }
 
 /** Reads and posts for the MCP tools. Callers check the channel is allowed first. */
+function forumTags(forum: ForumChannel) {
+  return {
+    tags: forum.availableTags.map((tag) => tag.name),
+    requireTag: forum.flags.has(ChannelFlags.RequireTag)
+  };
+}
+
+function forumPost(thread: AnyThreadChannel): ForumPost {
+  return {
+    id: thread.id,
+    title: thread.name,
+    authorId: thread.ownerId ?? null,
+    createdAt: thread.createdTimestamp ?? 0,
+    archived: Boolean(thread.archived),
+    messageCount: thread.messageCount ?? 0,
+    link: `https://discord.com/channels/${thread.guildId}/${thread.id}`
+  };
+}
+
 export function discordReader(client: Client): DiscordReader {
   async function guildChannel(channelId: string) {
     const channel = await client.channels.fetch(channelId).catch(() => null);
@@ -538,6 +561,11 @@ export function discordReader(client: Client): DiscordReader {
   async function textChannel(channelId: string) {
     const channel = await guildChannel(channelId);
     if (!channel?.isTextBased()) throw new Error(`Channel ${channelId} has no messages to read.`);
+    return channel;
+  }
+  async function forumChannel(channelId: string) {
+    const channel = await guildChannel(channelId);
+    if (channel?.type !== ChannelType.GuildForum) throw new Error(`Channel ${channelId} isn't a forum.`);
     return channel;
   }
   return {
@@ -551,7 +579,8 @@ export function discordReader(client: Client): DiscordReader {
         parentId: channel.parentId ?? null,
         isThread: channel.isThread(),
         isPrivate: channel.type === ChannelType.PrivateThread,
-        isPublic: everyoneCanView(channel)
+        isPublic: everyoneCanView(channel),
+        ...(channel.type === ChannelType.GuildForum ? { forum: forumTags(channel) } : {})
       };
     },
     async messages(channelId, { limit, before }) {
@@ -572,6 +601,27 @@ export function discordReader(client: Client): DiscordReader {
       const channel = await textChannel(channelId);
       const sent = await channel.send({ content, allowedMentions: { parse: [] } });
       return sent.id;
+    },
+    async startPost(forumId, { title, content, tags }) {
+      const forum = await forumChannel(forumId);
+      const byName = new Map(forum.availableTags.map((tag) => [tag.name, tag.id]));
+      const thread = await forum.threads.create({
+        name: title,
+        message: { content, allowedMentions: { parse: [] } },
+        appliedTags: tags.flatMap((name) => byName.get(name) ?? [])
+      });
+      return { threadId: thread.id, messageId: thread.id };
+    },
+    async posts(forumId, limit) {
+      const forum = await forumChannel(forumId);
+      const active = await forum.threads.fetchActive(false);
+      const open = [...active.threads.values()].sort((a, b) => (b.createdTimestamp ?? 0) - (a.createdTimestamp ?? 0));
+      const posts = open.slice(0, limit).map(forumPost);
+      if (posts.length < limit) {
+        const archived = await forum.threads.fetchArchived({ type: 'public', limit: limit - posts.length }, false);
+        posts.push(...[...archived.threads.values()].map(forumPost));
+      }
+      return posts;
     },
     async react(channelId, messageId, emoji) {
       const channel = await textChannel(channelId);

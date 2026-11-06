@@ -10,7 +10,7 @@ type Sent = { channelId: string; content: string; ping?: string; buttons?: strin
 function setup() {
   const sent: Sent[] = [];
   const members: [string, string][] = [];
-  const threads: { channelId: string; title: string; intro: string }[] = [];
+  const threads: { channelId: string; title: string; intro: string; private?: boolean }[] = [];
   const started: StartTaskInput[] = [];
   const forwarded: { taskId: string; text: string }[] = [];
   const threadsOnMessage: { channelId: string; messageId: string; title: string }[] = [];
@@ -19,8 +19,8 @@ function setup() {
   let nextTask = 1;
 
   const chat: ChatPort = {
-    async createTaskThread(channelId, title, intro) {
-      threads.push({ channelId, title, intro });
+    async createTaskThread(channelId, title, intro, options) {
+      threads.push({ channelId, title, intro, ...(options?.private ? { private: true } : {}) });
       return `thread-${threads.length}`;
     },
     async createThreadOnMessage(channelId, messageId, title) {
@@ -257,4 +257,14 @@ test('after sleep the next reply wakes Devin and unarchives the session', async 
   assert.equal(t.store.byThread('thread-1')?.sleptBy, null);
   await t.bridge.forward('thread-1', opener, 'again', []);
   assert.deepEqual(t.controls, ['sleep task-1', 'unarchive task-1']);
+});
+
+test('a task from a private thread asks for a private task thread', async () => {
+  const t = setup();
+  await t.bridge.start({ kind: 'message', ...base, channelId: 'private-thread', privateThread: true, message });
+  assert.equal(t.threads.length, 1);
+  assert.equal(t.threads[0].channelId, 'private-thread');
+  assert.equal(t.threads[0].private, true);
+  await t.bridge.start({ kind: 'prompt', ...base, channelId: 'chan', task: 'public', attachments: [] });
+  assert.equal(t.threads[1].private, undefined);
 });

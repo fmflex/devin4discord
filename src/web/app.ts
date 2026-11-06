@@ -641,13 +641,8 @@ export function createWebApp(deps: WebDeps) {
     const form = (await c.req.parseBody({ all: true })) as Form;
     const { channels } = await mcpChannelSettings(guild.id);
     const names = new Map(channels.map((channel) => [channel.id, channel.name]));
-    const postableIds = new Set(
-      channels
-        .filter((channel) => channel.kind === 'text' || channel.kind === 'announcement')
-        .map((channel) => channel.id)
-    );
     const readable = fields(form, 'read').filter((id) => names.has(id));
-    const postable = fields(form, 'post').filter((id) => postableIds.has(id));
+    const postable = fields(form, 'post').filter((id) => names.has(id));
     deps.guilds.setMcpChannels(guild.id, readable, postable);
     const label = (id: string) => `#${names.get(id)}`;
     deps.guilds.audit(

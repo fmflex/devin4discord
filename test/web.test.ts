@@ -332,8 +332,8 @@ test('MCP read and post channels are configured together with admin opt-in', asy
   assert.match(page, /name="read" value="400000000000000001"/);
   assert.match(page, /name="post" value="400000000000000001"/);
   assert.match(page, /name="read" value="400000000000000003"/);
-  assert.doesNotMatch(page, /name="post" value="400000000000000003"/);
-  assert.match(page, /<span class="muted small">n\/a<\/span>/);
+  assert.match(page, /name="post" value="400000000000000003"/);
+  assert.doesNotMatch(page, /n\/a/);
   assert.match(page, /About MCP read channels/);
   assert.match(page, /About MCP posting channels/);
   assert.match(page, /Channels Devin may read through MCP/);
@@ -367,9 +367,9 @@ test('MCP read and post channels are configured together with admin opt-in', asy
   });
   assert.equal(saved.status, 302);
   assert.deepEqual(t.guilds.mcpReadChannels(G), ['400000000000000001', '400000000000000003']);
-  assert.deepEqual(t.guilds.mcpPostChannels(G), ['400000000000000001']);
+  assert.deepEqual(t.guilds.mcpPostChannels(G), ['400000000000000001', '400000000000000003']);
   assert.equal(t.guilds.auditLog(G)[0].action, 'mcp.channels');
-  assert.equal(t.guilds.auditLog(G)[0].detail, 'read: #general, #bug-reports; post: #general');
+  assert.equal(t.guilds.auditLog(G)[0].detail, 'read: #general, #bug-reports; post: #general, #bug-reports');
   const savedPage = await (await t.request(`/g/${G}/mcp`, { headers: { cookie: session } })).text();
   assert.match(savedPage, /name="read" value="400000000000000001"[^>]*checked/);
   assert.match(savedPage, /name="post" value="400000000000000001"[^>]*checked/);

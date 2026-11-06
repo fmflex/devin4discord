@@ -16,6 +16,7 @@ const THREAD = '500000000000000001';
 const OTHER_THREAD = '500000000000000002';
 const SUB_THREAD = '500000000000000003';
 const PRIVATE_THREAD = '500000000000000004';
+const LOGS = '400000000000000003';
 const FORUM = '400000000000000005';
 const FORUM_POST = '500000000000000005';
 const MSG = '600000000000000001';
@@ -32,6 +33,7 @@ function setup() {
     [SUB_THREAD, { id: SUB_THREAD, guildId: G, name: 'a thread', parentId: GENERAL, isThread: true, isPrivate: false, isPublic: true }],
     [PRIVATE_THREAD, { id: PRIVATE_THREAD, guildId: G, name: 'private', parentId: GENERAL, isThread: true, isPrivate: true, isPublic: true }],
     [THREAD, { id: THREAD, guildId: G, name: 'Devin: fix', parentId: SECRET_CH, isThread: true, isPrivate: false, isPublic: false }],
+    [LOGS, { id: LOGS, guildId: G, name: 'logs', parentId: null, isThread: false, isPrivate: false, isPublic: false, bot: { read: true, post: false } }],
     [FORUM, { id: FORUM, guildId: G, name: 'bugs', parentId: null, isThread: false, isPrivate: false, isPublic: true, forum: { tags: ['Bug', 'Question'], requireTag: false } }],
     [FORUM_POST, { id: FORUM_POST, guildId: G, name: 'crash on login', parentId: FORUM, isThread: true, isPrivate: false, isPublic: true }],
     [OTHER_THREAD, { id: OTHER_THREAD, guildId: OTHER, name: 'Devin: other', parentId: null, isThread: true, isPrivate: false, isPublic: true }]
@@ -74,9 +76,10 @@ function setup() {
     member: async () => null,
     roles: async () => [],
     channels: async () => [
-      { id: GENERAL, name: 'general', kind: 'text', category: null, position: 0, public: true },
+      { id: GENERAL, name: 'general', kind: 'text', category: null, position: 0, public: true, bot: { read: true, post: true } },
       { id: SECRET_CH, name: 'staff', kind: 'text', category: null, position: 1, public: false, bot: { read: false, post: false } },
-      { id: FORUM, name: 'bugs', kind: 'forum', category: null, position: 2, public: true, tags: ['Bug', 'Question'], requireTag: false }
+      { id: LOGS, name: 'logs', kind: 'text', category: null, position: 2, public: false, bot: { read: true, post: false } },
+      { id: FORUM, name: 'bugs', kind: 'forum', category: null, position: 3, public: true, tags: ['Bug', 'Question'], requireTag: false }
     ],
     visibleChannels: async () => []
   };
@@ -106,7 +109,7 @@ function setup() {
     const { body } = await rpc('tools/call', { name, arguments: args });
     return body.result as { content: { text: string }[]; isError?: boolean };
   };
-  return { handle, rpc, tool, token, other, guilds, tasks, sent, started, reactions, reads };
+  return { handle, rpc, tool, token, other, guilds, tasks, sent, started, reactions, reads, channels };
 }
 
 test('MCP rejects missing, unknown and revoked tokens and foreign origins', async () => {
@@ -315,4 +318,32 @@ test('the other server\'s token sees only its own tasks', async () => {
   const t = setup();
   const { body } = await t.rpc('tools/call', { name: 'read_task_thread', arguments: { task_key: KEY } }, {}, t.other.token);
   assert.equal(body.result.isError, true);
+});
+
+test("MCP 'bot' modes follow the bot's own Discord permissions instead of the lists", async () => {
+  const t = setup();
+  t.channels.set(GENERAL, { ...t.channels.get(GENERAL)!, bot: { read: true, post: true } });
+  t.channels.set(PRIVATE_THREAD, { ...t.channels.get(PRIVATE_THREAD)!, bot: { read: true, post: true } });
+  assert.equal((await t.tool('read_channel', { channel_id: LOGS })).isError, true);
+  assert.equal((await t.tool('post_to_channel', { channel_id: GENERAL, content: 'no' })).isError, true);
+
+  t.guilds.setMcpChannels(G, [], [], { read: 'bot', post: 'bot' });
+  assert.deepEqual(t.guilds.mcpModes(G), { read: 'bot', post: 'bot' });
+  assert.ok(!(await t.tool('read_channel', { channel_id: LOGS })).isError);
+  assert.ok(!(await t.tool('get_message', { channel_id: LOGS, message_id: MSG })).isError);
+  assert.equal((await t.tool('read_channel', { channel_id: SECRET_CH })).isError, true);
+  assert.equal((await t.tool('read_channel', { channel_id: PRIVATE_THREAD })).isError, true);
+  assert.ok(!(await t.tool('post_to_channel', { channel_id: GENERAL, content: 'hi' })).isError);
+  assert.equal((await t.tool('post_to_channel', { channel_id: LOGS, content: 'no' })).isError, true);
+  assert.equal((await t.tool('post_to_channel', { channel_id: PRIVATE_THREAD, content: 'no' })).isError, true);
+  assert.deepEqual(t.sent.map((s) => s.channelId), [GENERAL]);
+
+  const list = (await t.tool('list_channels', {})).content[0].text;
+  assert.match(list, /You may read every channel the bot can read in Discord/);
+  assert.match(list, /#logs \(text\): 400000000000000003/);
+  assert.doesNotMatch(list, /#staff/);
+  assert.match(list, /You may post in every channel the bot can post in:\n- #general: 400000000000000001$/);
+
+  t.guilds.setMcpChannels(G, [], [], { read: 'custom', post: 'custom' });
+  assert.equal((await t.tool('read_channel', { channel_id: LOGS })).isError, true);
 });

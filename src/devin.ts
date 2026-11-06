@@ -25,7 +25,16 @@ export type StartTaskInput = {
 
 export type StartedTask = { id: string; url: string };
 
-export type AgentMessage = { id: string; text: string };
+/** A file Devin attached to a message, as `uuid`/`name` of its attachment URL. */
+export type AgentFile = { uuid: string; name: string };
+
+export type AgentMessage = { id: string; text: string; files: AgentFile[] };
+
+/** A downloaded attachment, ready to upload to Discord. */
+export type DownloadedFile = { name: string; data: Uint8Array };
+
+/** Discord's upload limit for servers without boosts. */
+export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 export type TaskUpdate = {
   state: TaskState;
@@ -41,7 +50,7 @@ export type TaskUpdate = {
 /** What the bridge needs from Devin; tests pass fakes. */
 export type DevinApi = Pick<
   DevinClient,
-  'startTask' | 'sendMessage' | 'getUpdate' | 'terminate' | 'sleep' | 'unarchive'
+  'startTask' | 'sendMessage' | 'getUpdate' | 'terminate' | 'sleep' | 'unarchive' | 'downloadAttachment'
 >;
 
 export const DEFAULT_DEVIN_API_URL = 'https://api.devin.ai';
@@ -70,6 +79,38 @@ type DevinMessage = {
 };
 
 const MAX_MESSAGE_PAGES = 20;
+
+const ATTACHMENT_LINE = /^[ \t]*ATTACHMENT:(\{.*\})[ \t]*$/gm;
+const ATTACHMENT_PATH = /\/attachments\/([\w-]{1,100})\/([^/?#]{1,255})$/;
+
+/**
+ * Splits the `ATTACHMENT:{"url": …}` lines Devin appends for attached files out of a
+ * message. Lines that don't hold a Devin attachment URL stay in the text.
+ */
+export function parseAgentMessage(message: string): { text: string; files: AgentFile[] } {
+  const files: AgentFile[] = [];
+  const text = message.replace(ATTACHMENT_LINE, (line, json: string) => {
+    let url: URL;
+    try {
+      const parsed = JSON.parse(json) as { url?: unknown };
+      if (typeof parsed.url !== 'string') return line;
+      url = new URL(parsed.url);
+    } catch {
+      return line;
+    }
+    const match = ATTACHMENT_PATH.exec(url.pathname);
+    if (!match) return line;
+    let name: string;
+    try {
+      name = decodeURIComponent(match[2]);
+    } catch {
+      return line;
+    }
+    files.push({ uuid: match[1], name });
+    return '';
+  });
+  return { text: text.replace(/\n{3,}/g, '\n\n').trim(), files };
+}
 
 export function devinState(
   session: Pick<DevinSession, 'status' | 'status_detail'>
@@ -254,7 +295,7 @@ export class DevinClient {
     const messages: AgentMessage[] = all
       .slice(lastSeen + 1)
       .filter((m) => m.source === 'devin' && m.message.trim())
-      .map((m) => ({ id: m.event_id, text: m.message }));
+      .map((m) => ({ id: m.event_id, ...parseAgentMessage(m.message) }));
     const { state, label } = devinState(session);
     return {
       state,
@@ -281,6 +322,30 @@ export class DevinClient {
   /** `POST .../sessions/{id}/unarchive`, after a reply wakes a session we put to sleep. */
   async unarchive(taskId: string) {
     await this.request(`/sessions/${encodeURIComponent(taskId)}/unarchive`, 'POST');
+  }
+
+  /**
+   * `GET /v3/organizations/{org}/attachments/{uuid}/{name}`. It redirects to a presigned
+   * URL, which is fetched without the API key.
+   */
+  async downloadAttachment(file: AgentFile): Promise<DownloadedFile> {
+    const path = `/v3/organizations/${encodeURIComponent(this.config.orgId)}/attachments/${encodeURIComponent(file.uuid)}/${encodeURIComponent(file.name)}`;
+    let response = await this.fetch(`${this.config.baseUrl.replace(/\/+$/, '')}${path}`, {
+      headers: { Authorization: `Bearer ${this.config.apiKey}` },
+      redirect: 'manual'
+    });
+    const location = response.headers.get('location');
+    if (response.status >= 300 && response.status < 400 && location) {
+      response = await this.fetch(new URL(location, response.url || this.config.baseUrl), { redirect: 'follow' });
+    }
+    if (!response.ok) {
+      throw new DevinApiError(`Downloading attachment ${file.name} failed with ${response.status}`, response.status);
+    }
+    const length = Number(response.headers.get('content-length'));
+    if (length > MAX_ATTACHMENT_BYTES) throw new Error(`Attachment ${file.name} is too large to upload.`);
+    const data = new Uint8Array(await response.arrayBuffer());
+    if (data.byteLength > MAX_ATTACHMENT_BYTES) throw new Error(`Attachment ${file.name} is too large to upload.`);
+    return { name: file.name, data };
   }
 
   private async listMessages(sessionId: string) {

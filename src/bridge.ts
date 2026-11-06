@@ -1,5 +1,5 @@
 import { randomToken, sha256 } from './crypto.ts';
-import type { Attachment, DevinApi, Person } from './devin.ts';
+import type { AgentMessage, Attachment, DevinApi, DownloadedFile, Person } from './devin.ts';
 import {
   MCP_TASK_KEY_PREFIX,
   chunkMessage,
@@ -28,8 +28,14 @@ export interface ChatPort {
   /** Opens a thread on an existing message, e.g. the one that @mentioned the bot. */
   createThreadOnMessage(channelId: string, messageId: string, title: string): Promise<string>;
   addThreadMember(threadId: string, userId: string): Promise<void>;
-  /** Posts one message; mentions are only allowed for `pingUserId`. */
-  send(channelId: string, content: string, pingUserId?: string, buttons?: ChatButton[]): Promise<void>;
+  /** Posts one message, with `files` uploaded on it; mentions are only allowed for `pingUserId`. */
+  send(
+    channelId: string,
+    content: string,
+    pingUserId?: string,
+    buttons?: ChatButton[],
+    files?: DownloadedFile[]
+  ): Promise<void>;
 }
 
 export type StartRequest = {
@@ -248,7 +254,7 @@ export class Bridge {
     try {
       const update = await devin.getUpdate(row.taskId, row.cursor);
       for (const message of update.messages) {
-        await this.post(row.threadId, `**Devin:** ${message.text}`);
+        await this.relay(devin, row, message);
         this.store.update(row.taskId, { cursor: message.id });
       }
       const known = new Set(row.pullRequests);
@@ -280,7 +286,32 @@ export class Bridge {
     }
   }
 
-  private async post(channelId: string, content: string, pingUserId?: string, buttons?: ChatButton[]) {
+  /** Posts a Devin message with its attached files uploaded to Discord. */
+  private async relay(devin: DevinApi, row: TaskRow, message: AgentMessage) {
+    const files: DownloadedFile[] = [];
+    const missing: string[] = [];
+    for (const file of message.files) {
+      try {
+        files.push(await devin.downloadAttachment(file));
+      } catch (error) {
+        console.error(`Downloading attachment ${file.name} of task ${row.taskId} failed:`, error);
+        missing.push(file.name);
+      }
+    }
+    const lines = [message.text ? `**Devin:** ${message.text}` : '**Devin:**'];
+    if (missing.length) {
+      lines.push(`_Couldn't upload ${missing.map((name) => `\`${name}\``).join(', ')}; see ${row.url}_`);
+    }
+    await this.post(row.threadId, lines.join('\n\n'), undefined, undefined, files);
+  }
+
+  private async post(
+    channelId: string,
+    content: string,
+    pingUserId?: string,
+    buttons?: ChatButton[],
+    files?: DownloadedFile[]
+  ) {
     const chunks = chunkMessage(pingUserId ? `<@${pingUserId}> ${content}` : content);
     for (let index = 0; index < chunks.length; index++) {
       const last = index === chunks.length - 1;
@@ -288,7 +319,8 @@ export class Bridge {
         channelId,
         chunks[index],
         index === 0 ? pingUserId : undefined,
-        last ? buttons : undefined
+        last ? buttons : undefined,
+        last && files?.length ? files : undefined
       );
     }
   }

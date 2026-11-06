@@ -544,6 +544,9 @@ export function discordReader(client: Client): DiscordReader {
     async channel(channelId) {
       const channel = await guildChannel(channelId);
       if (!channel) return null;
+      const me = channel.guild.members.me ?? (await channel.guild.members.fetchMe().catch(() => null));
+      const perms = me ? channel.permissionsFor(me) : null;
+      const send = channel.isThread() ? PermissionFlagsBits.SendMessagesInThreads : PermissionFlagsBits.SendMessages;
       return {
         id: channel.id,
         guildId: channel.guildId,
@@ -551,7 +554,15 @@ export function discordReader(client: Client): DiscordReader {
         parentId: channel.parentId ?? null,
         isThread: channel.isThread(),
         isPrivate: channel.type === ChannelType.PrivateThread,
-        isPublic: everyoneCanView(channel)
+        isPublic: everyoneCanView(channel),
+        ...(perms
+          ? {
+              bot: {
+                read: perms.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory]),
+                post: perms.has([PermissionFlagsBits.ViewChannel, send])
+              }
+            }
+          : {})
       };
     },
     async messages(channelId, { limit, before }) {

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { html, raw } from 'hono/html';
 import type { ChannelInfo, RoleInfo } from '../directory.ts';
 import { DEFAULT_INSTRUCTIONS } from '../format.ts';
-import { MAX_CONTEXT_MESSAGES, type AuditEntry } from '../guilds.ts';
+import { MAX_CONTEXT_MESSAGES, type AuditEntry, type McpModes } from '../guilds.ts';
 
 export type MentionSettings = { contextMessages: number; mentionOnlyReplies: boolean };
 import { ADMIN_ROLE, PERMISSIONS, PERMISSION_LABELS, adminRule, type RoleRule } from '../permissions.ts';
@@ -393,10 +393,10 @@ export function channelsPage(
 const MCP_TOOLS: [string, string][] = [
   ['read_task_thread', "read the task's thread"],
   ['post_to_task_thread', 'post in it, without pinging anyone'],
-  ['post_to_channel', 'post in the channels ticked below, without pinging anyone'],
+  ['post_to_channel', 'post in the channels allowed below, without pinging anyone'],
   ['add_reaction', 'react to messages in it'],
   ['list_channels', 'list the channels it may read and post in'],
-  ['read_channel', 'read a channel ticked under Read (or its threads)'],
+  ['read_channel', 'read a channel allowed under Read (or its threads)'],
   ['get_message', 'read one message, e.g. from a link']
 ];
 
@@ -404,7 +404,7 @@ export function mcpPage(
   session: WebSession,
   guild: { id: string; name: string },
   url: string,
-  settings: { channels: ChannelInfo[]; read: string[]; post: string[]; allowed: string[] },
+  settings: { channels: ChannelInfo[]; read: string[]; post: string[]; allowed: string[]; modes: McpModes },
   token: { hint: string; createdAt: number } | null,
   newToken: string | null,
   notice: PageOptions['notice'],
@@ -422,9 +422,23 @@ export function mcpPage(
   const inheritedChannels = settings.channels
     .filter((channel) => allowedSet.has(channel.id))
     .map((channel) => `#${channel.name}`);
-  const readSummary = settings.read.length
-    ? 'Reading: only the ticked channels.'
-    : `Reading: none ticked, so it follows the Channels tab: ${settings.allowed.length ? inheritedChannels.join(', ') : 'channels @everyone can see'}.`;
+  const { modes } = settings;
+  const readSummary =
+    modes.read === 'bot'
+      ? "Reading: every channel the bot can read in Discord. The Read ticks are kept but not used."
+      : settings.read.length
+        ? 'Reading: only the ticked channels.'
+        : `Reading: none ticked, so it follows the Channels tab: ${settings.allowed.length ? inheritedChannels.join(', ') : 'channels @everyone can see'}.`;
+  const postSummary =
+    modes.post === 'bot'
+      ? "Posting: every text and announcement channel the bot can post in. The Post ticks are kept but not used."
+      : settings.post.length
+        ? 'Posting: only the ticked channels.'
+        : 'Posting: none ticked, so only its own task threads.';
+  const modeChoice = (name: 'read_mode' | 'post_mode', mode: 'custom' | 'bot', label: string, bot: string) =>
+    html`<p class="check"><strong>${label}</strong>
+      <label class="check"><input type="radio" name="${name}" value="custom" ${mode === 'custom' ? 'checked' : ''}> Custom: the ticked channels</label>
+      <label class="check"><input type="radio" name="${name}" value="bot" ${mode === 'bot' ? 'checked' : ''}> ${bot}</label></p>`;
   const hasBotPermissionLimits = settings.channels.some(
     (channel) => channel.bot?.read === false || channel.bot?.post === false
   );
@@ -442,7 +456,7 @@ export function mcpPage(
       <label>Server URL ${help('the server URL', html`<p>Paste this as the URL of a custom MCP server in Devin, with transport <strong>HTTP</strong>.</p><p>It comes from <code>PUBLIC_URL</code>. On a Cloudflare quick tunnel it changes whenever the tunnel restarts, so update it in Devin when that happens.</p>`)}
         <input readonly value="${url}" spellcheck="false">
       </label>
-      <label>Token ${help('the token', html`<p>A bearer token that identifies this server. Anyone with it can read the selected MCP channels (or the Channels tab's Allowed list when none are ticked, and channels @everyone can see when that's empty too) and post in selected MCP channels, so keep it in Devin only.</p><p>Task threads need more than the token: each task's session gets its own task key in its prompt.</p><p>Generating a new one stops the old one at once.</p>`)}</label>
+      <label>Token ${help('the token', html`<p>A bearer token that identifies this server. Anyone with it can read and post where the Channels section below allows (in Bot's Discord permissions mode, everywhere the bot can), so keep it in Devin only.</p><p>Task threads need more than the token: each task's session gets its own task key in its prompt.</p><p>Generating a new one stops the old one at once.</p>`)}</label>
       <p class="muted small">${token ? html`Token is <strong>set, ends in …${token.hint}</strong>, created ${created}.` : 'No token yet. Generate one to turn the MCP server on.'}</p>
       ${canEdit ? '' : ADMIN_ONLY_NOTE}
       <form method="post" action="/g/${guild.id}/mcp/token">${csrfField(session)}${editable(canEdit, html`<button class="button">${token ? 'Generate a new token' : 'Generate token'}</button>`)}</form>
@@ -460,7 +474,10 @@ export function mcpPage(
       <h3>Channels</h3>
       <form method="post" action="/g/${guild.id}/mcp/channels">
         ${csrfField(session)}
-        ${editable(canEdit, html`<table class="grid">
+        ${editable(canEdit, html`${modeChoice('read_mode', modes.read, 'Read', "Bot's Discord permissions: every channel the bot can read")}
+        ${modeChoice('post_mode', modes.post, 'Post', "Bot's Discord permissions: every channel the bot can post in")}
+        <p class="muted small">${help('the channel modes', html`<p><strong>Custom</strong> uses the ticks below (and their fallbacks).</p><p><strong>Bot's Discord permissions</strong> lets Devin read, or post in, every channel and public thread where the bot's role has View Channel and Read Message History (Read) or Send Messages (Post), including channels created later and other tasks' public threads. Private threads stay off-limits.</p><p>Anyone with the token gets that reach, so give the bot's role only the access you want Devin to have.</p>`)} Switching keeps your ticks, so you can switch back.</p>
+        <table class="grid">
           <thead><tr>
             <th>Channel</th>
             <th>Read ${help('MCP read channels', html`<p>Channels Devin may read through MCP (<code>list_channels</code>, <code>read_channel</code>, <code>get_message</code>), and the public threads inside them. Private threads are never readable. Devin reads its own task thread with <code>read_task_thread</code>, using a key only that task's session gets; it can't open other task threads unless their channel is ticked.</p><p>With none ticked, it follows the Allowed list on the Channels tab. When that's empty too, it can only read channels <strong>@everyone</strong> can see.</p><p>The bot's own Discord permissions come first: where its role can't see the channel (or send messages, for Post), nothing gets through, ticked or not.</p><p>${doc('https://support.discord.com/hc/en-us/articles/206141927-How-is-the-permission-hierarchy-structured', 'Discord permission hierarchy')}</p>`)}</th>
@@ -482,6 +499,7 @@ export function mcpPage(
           </tbody>
         </table>
         <p class="muted small">${readSummary}</p>
+        <p class="muted small">${postSummary}</p>
         ${hasBotPermissionLimits
           ? html`<p class="muted small">Channels marked "bot can't…" need the bot's role to get View Channel and Read Message History (Read) or Send Messages (Post) in Discord.</p>`
           : ''}

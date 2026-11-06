@@ -136,12 +136,12 @@ const SECTIONS: Section[] = [
           <tr><td><code>post_to_task_thread</code></td><td>Post in it (not after the task is stopped)</td></tr>
           <tr><td><code>add_reaction</code></td><td>React to a message in it</td></tr>
           <tr><td><code>list_channels</code></td><td>List the channels it may read and post in</td></tr>
-          <tr><td><code>read_channel</code></td><td>Read a channel ticked under Read, or a public thread in it</td></tr>
+          <tr><td><code>read_channel</code></td><td>Read a channel allowed under Read, or a public thread in it</td></tr>
           <tr><td><code>get_message</code></td><td>Read one message, for example from a link</td></tr>
-          <tr><td><code>post_to_channel</code></td><td>Post in a channel ticked under Post</td></tr>
+          <tr><td><code>post_to_channel</code></td><td>Post in a channel allowed under Post</td></tr>
         </tbody>
       </table>
-      <p><strong>What it can reach:</strong> the Read and Post lists on the MCP page. Read follows the Channels page's Allowed list when nothing is ticked (and only channels <code>@everyone</code> can see when that's empty too). Post is off until you tick something. Private threads are never readable or postable. Posts never ping anyone.</p>
+      <p><strong>What it can reach:</strong> the Read and Post lists on the MCP page. Read follows the Channels page's Allowed list when nothing is ticked (and only channels <code>@everyone</code> can see when that's empty too). Post is off until you tick something. Switch Read or Post to <strong>Bot's Discord permissions</strong> to follow the bot's role instead: every channel and public thread it can read (or post in), including new ones. Private threads are never readable or postable. Posts never ping anyone.</p>
       <p><strong>Task threads</strong> need more than the token: each task started while a token exists gets its own task key in its prompt, so a Devin session can only work in its own thread.</p>
       <p>Anyone with the token can read and post where it's allowed. Keep it in Devin only, and generate a new one if it leaks.</p>
       <p>${doc(DOCS.mcp, 'Devin docs: MCP servers')}</p>`

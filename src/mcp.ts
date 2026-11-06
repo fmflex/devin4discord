@@ -2,7 +2,8 @@
  * Per-server MCP endpoint for Devin (Streamable HTTP, JSON responses only).
  * The bearer token picks the server. Task-thread tools need the task key that
  * only that task's session was given; channel reads follow the server's read
- * list (public channels when none is set). Everything read back is marked as
+ * list (public channels when none is set), or the bot's own Discord
+ * permissions when the server picked that mode. Everything read back is marked as
  * untrusted Discord content.
  */
 import { randomToken, sha256 } from './crypto.ts';
@@ -21,6 +22,8 @@ export type ChannelRef = {
   isPrivate: boolean;
   /** @everyone can view it (for a thread, its parent channel). */
   isPublic: boolean;
+  /** The bot's own Discord permissions here; absent when unknown. */
+  bot?: { read: boolean; post: boolean };
 };
 
 export type ReadMessage = {
@@ -218,10 +221,19 @@ export function createMcpHandler(deps: McpDeps) {
     return task;
   }
 
-  /** A channel on the read list or a public thread inside one; with no list, public channels only. */
+  /**
+   * A channel on the read list or a public thread inside one; with no list, public channels only.
+   * In 'bot' mode, any channel or public thread the bot can read.
+   */
   async function readable(guildId: string, channelId: string) {
     const channel = await deps.reader.channel(channelId);
     if (!channel || channel.guildId !== guildId) throw new ToolError('Channel not found in this server.');
+    if (deps.guilds.mcpModes(guildId).read === 'bot') {
+      if (channel.isPrivate || channel.bot?.read !== true) {
+        throw new ToolError("That channel isn't one the bot can read in Discord, so Devin can't read it through MCP.");
+      }
+      return channel;
+    }
     const { ids: allowed } = readList(guildId);
     const listed = allowed.includes(channel.id) || Boolean(channel.isThread && channel.parentId && allowed.includes(channel.parentId));
     if (channel.isPrivate || (allowed.length ? !listed : !channel.isPublic)) {
@@ -263,11 +275,14 @@ export function createMcpHandler(deps: McpDeps) {
       case 'post_to_channel': {
         const channel = await deps.reader.channel(snowflake(args, 'channel_id'));
         if (!channel || channel.guildId !== guildId) throw new ToolError('Channel not found in this server.');
+        const byBot = deps.guilds.mcpModes(guildId).post === 'bot';
         const postable = deps.guilds.mcpPostChannels(guildId);
         if (
           channel.isPrivate ||
-          (!postable.includes(channel.id) &&
-            !(channel.isThread && channel.parentId && postable.includes(channel.parentId)))
+          (byBot
+            ? channel.bot?.post !== true
+            : !postable.includes(channel.id) &&
+              !(channel.isThread && channel.parentId && postable.includes(channel.parentId)))
         ) {
           throw new ToolError("Devin isn't allowed to post in that channel. A server admin can allow it on the MCP page of the setup site.");
         }
@@ -282,17 +297,26 @@ export function createMcpHandler(deps: McpDeps) {
         return 'Reacted.';
       }
       case 'list_channels': {
+        const modes = deps.guilds.mcpModes(guildId);
         const { ids: allowed, source } = readList(guildId);
         const directoryChannels = await deps.directory.channels(guildId);
         const channels = directoryChannels
-          .filter((channel) => (allowed.length ? allowed.includes(channel.id) : channel.public === true))
+          .filter((channel) =>
+            modes.read === 'bot'
+              ? channel.bot?.read === true
+              : allowed.length
+                ? allowed.includes(channel.id)
+                : channel.public === true
+          )
           .sort((a, b) => a.position - b.position);
         const scope =
-          source === 'mcp'
-            ? 'the channels picked on the MCP page'
-            : allowed.length
-              ? 'the allowed channels'
-              : 'the channels everyone in the server can see (no read list is set)';
+          modes.read === 'bot'
+            ? 'every channel the bot can read in Discord'
+            : source === 'mcp'
+              ? 'the channels picked on the MCP page'
+              : allowed.length
+                ? 'the allowed channels'
+                : 'the channels everyone in the server can see (no read list is set)';
         const readable = channels.length
           ? `You may read ${scope} and the public threads inside them (use read_task_thread for your own task thread):\n${channels
               .map(
@@ -301,9 +325,14 @@ export function createMcpHandler(deps: McpDeps) {
               )
               .join('\n')}`
           : 'No readable channels.';
-        const postable = deps.guilds.mcpPostChannels(guildId);
+        const postable =
+          modes.post === 'bot'
+            ? directoryChannels
+                .filter((channel) => channel.bot?.post === true && channel.kind !== 'forum')
+                .map((channel) => channel.id)
+            : deps.guilds.mcpPostChannels(guildId);
         const posting = postable.length
-          ? `You may post in:\n${directoryChannels
+          ? `You may post in${modes.post === 'bot' ? ' every channel the bot can post in' : ''}:\n${directoryChannels
               .filter((channel) => postable.includes(channel.id))
               .sort((a, b) => a.position - b.position)
               .map(

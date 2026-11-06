@@ -29,6 +29,10 @@ export type DevinSettings = {
   updatedAt: number;
 };
 
+/** Where MCP may read or post: the ticked lists, or anywhere the bot's own Discord permissions allow. */
+export type McpMode = 'custom' | 'bot';
+export type McpModes = { read: McpMode; post: McpMode };
+
 export type AuditEntry = {
   id: number;
   actorId: string;
@@ -246,7 +250,22 @@ export class GuildStore {
     ).map((row) => row.channel_id);
   }
 
-  setMcpChannels(guildId: string, read: string[], post: string[]) {
+  mcpModes(guildId: string): McpModes {
+    const row = this.db
+      .prepare('select mcp_read_mode, mcp_post_mode from guilds where guild_id = ?')
+      .get(guildId) as { mcp_read_mode: string; mcp_post_mode: string } | undefined;
+    return {
+      read: row?.mcp_read_mode === 'bot' ? 'bot' : 'custom',
+      post: row?.mcp_post_mode === 'bot' ? 'bot' : 'custom'
+    };
+  }
+
+  setMcpChannels(
+    guildId: string,
+    read: string[],
+    post: string[],
+    modes: McpModes = { read: 'custom', post: 'custom' }
+  ) {
     this.ensure(guildId);
     const insertRead = this.db.prepare(
       'insert or ignore into guild_mcp_read_channels (guild_id, channel_id) values (?, ?)'
@@ -259,6 +278,9 @@ export class GuildStore {
       this.db.prepare('delete from guild_mcp_post_channels where guild_id = ?').run(guildId);
       for (const channelId of read) insertRead.run(guildId, channelId);
       for (const channelId of post) insertPost.run(guildId, channelId);
+      this.db
+        .prepare('update guilds set mcp_read_mode = ?, mcp_post_mode = ?, updated_at = ? where guild_id = ?')
+        .run(modes.read, modes.post, Date.now(), guildId);
     });
   }
 

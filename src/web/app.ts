@@ -6,7 +6,7 @@ import { randomToken, safeEqual, type Secrets } from '../crypto.ts';
 import { DEVIN_USER_ID, verifyDevinCredentials, verifyDevinOrgUser } from '../devin.ts';
 import { MAX_BODY_BYTES as MAX_MCP_BODY_BYTES, newMcpToken } from '../mcp.ts';
 import type { Directory } from '../directory.ts';
-import { DEFAULT_CONTEXT_MESSAGES, MAX_CONTEXT_MESSAGES, type Actor, type GuildStore } from '../guilds.ts';
+import { DEFAULT_CONTEXT_MESSAGES, MAX_CONTEXT_MESSAGES, type Actor, type GuildStore, type McpMode } from '../guilds.ts';
 import {
   ADMIN_DEFAULT,
   ADMIN_ROLE,
@@ -593,7 +593,8 @@ export function createWebApp(deps: WebDeps) {
       channels: await deps.directory.channels(guildId),
       read: deps.guilds.mcpReadChannels(guildId),
       post: deps.guilds.mcpPostChannels(guildId),
-      allowed: deps.guilds.allowedChannels(guildId)
+      allowed: deps.guilds.allowedChannels(guildId),
+      modes: deps.guilds.mcpModes(guildId)
     };
   }
 
@@ -648,13 +649,16 @@ export function createWebApp(deps: WebDeps) {
     );
     const readable = fields(form, 'read').filter((id) => names.has(id));
     const postable = fields(form, 'post').filter((id) => postableIds.has(id));
-    deps.guilds.setMcpChannels(guild.id, readable, postable);
+    const mode = (name: string): McpMode => (field(form, name) === 'bot' ? 'bot' : 'custom');
+    const modes = { read: mode('read_mode'), post: mode('post_mode') };
+    deps.guilds.setMcpChannels(guild.id, readable, postable, modes);
     const label = (id: string) => `#${names.get(id)}`;
+    const BOT_SCOPE = "wherever the bot's Discord permissions allow";
     deps.guilds.audit(
       guild.id,
       actor,
       'mcp.channels',
-      `read: ${readable.map(label).join(', ') || 'Channels tab'}; post: ${postable.map(label).join(', ') || 'none'}`
+      `read: ${modes.read === 'bot' ? BOT_SCOPE : readable.map(label).join(', ') || 'Channels tab'}; post: ${modes.post === 'bot' ? BOT_SCOPE : postable.map(label).join(', ') || 'none'}`
     );
     return c.redirect(`/g/${guild.id}/mcp?saved=1`);
   });

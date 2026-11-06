@@ -174,10 +174,11 @@ function botSetup() {
       controls.push(`unarchive ${taskId}`);
     }
   };
-  let threads = 0;
+  const taskThreads: { channelId: string; private: boolean }[] = [];
   const chat: ChatPort = {
-    async createTaskThread() {
-      return `thread-${++threads}`;
+    async createTaskThread(channelId, _title, _intro, options) {
+      taskThreads.push({ channelId, private: Boolean(options?.private) });
+      return `thread-${taskThreads.length}`;
     },
     async createThreadOnMessage(channelId, messageId, title) {
       threadsOnMessage.push({ channelId, messageId, title });
@@ -210,6 +211,7 @@ function botSetup() {
     controls,
     sent,
     threadsOnMessage,
+    taskThreads,
     configure,
     advance: (ms: number) => (now += ms)
   };
@@ -315,7 +317,7 @@ function incoming(
   t: ReturnType<typeof botSetup>,
   who: MemberSnapshot,
   content: string,
-  overrides: { channel?: { id: string; parentId: string | null }; id?: string; isReply?: boolean } = {}
+  overrides: { channel?: { id: string; parentId: string | null; isPrivate?: boolean }; id?: string; isReply?: boolean } = {}
 ) {
   const limits: number[] = [];
   const outcome = t.bot.handleMessage({
@@ -552,4 +554,27 @@ test('with an MCP token, each task gets its own MCP task key in the prompt', asy
   const owners = keys.map((key) => t.tasks.byMcpKey(sha256(key!))?.title);
   assert.deepEqual(owners, ['one', 'two']);
   assert.equal(t.tasks.byMcpKey(sha256(token.token)), null);
+});
+
+test('tasks started in a private thread stay in a private thread, even with a task channel', async () => {
+  const t = botSetup();
+  t.configure();
+  t.guilds.setChannels(G, [], 'tasks');
+  const helper = member({ id: '2', roleIds: [G, HELPER] });
+  const privateThread = { id: 'secret-thread', parentId: 'c1', isPrivate: true };
+
+  assert.equal((await t.bot.startFromMessage(G, helper, privateThread, message)).ok, true);
+  t.tasks.update('task-1', { active: false });
+  const mention = await incoming(t, helper, `<@${BOT}> summarize this`, { channel: privateThread, id: 'm2' }).outcome;
+  assert.equal(mention.action, 'started');
+  t.tasks.update('task-2', { active: false });
+  t.advance(25 * 60 * 60 * 1000);
+  assert.equal((await t.bot.startFromPrompt(G, helper, { id: 'public-thread', parentId: 'c1' }, 'x', [])).ok, true);
+
+  assert.deepEqual(t.taskThreads, [
+    { channelId: 'secret-thread', private: true },
+    { channelId: 'secret-thread', private: true },
+    { channelId: 'tasks', private: false }
+  ]);
+  assert.equal(t.threadsOnMessage.length, 0);
 });

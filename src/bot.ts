@@ -15,7 +15,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const LIST_SIZE = 10;
 const LIST_SCAN = 50;
 
-export type ChannelRef = { id: string; parentId: string | null };
+export type ChannelRef = { id: string; parentId: string | null; isPrivate?: boolean };
 
 export type DenyReason =
   | 'unconfigured'
@@ -327,10 +327,13 @@ export class Bot {
       );
     }
     const settings = this.guilds.settings(guildId);
+    // A private thread's text stays private: its task gets a private thread, never the task channel.
+    const privateThread = channel.isPrivate === true;
     const common = {
       guildId,
       opener: person(member),
-      channelId: settings?.taskChannelId ?? channel.id,
+      channelId: privateThread ? channel.id : settings?.taskChannelId ?? channel.id,
+      privateThread,
       instructions: settings?.instructions.trim() || DEFAULT_INSTRUCTIONS,
       maxAcu: limits.maxAcu,
       mcpTools: this.guilds.mcpToken(guildId) !== null

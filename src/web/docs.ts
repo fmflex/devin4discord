@@ -22,7 +22,7 @@ const SECTIONS: Section[] = [
             <li><code>ImpersonateOrgSessions</code> and <code>ViewOrgMembership</code>: only if you use <a href="#devin-settings">Run as Devin users</a></li>
           </ul>
         </li>
-        <li><strong>Add the bot.</strong> Sign in on the home page and click <strong>Add to Discord</strong> next to your server. Discord asks for View Channels, Send Messages, Send Messages in Threads, Create Public Threads, Read Message History, Add Reactions and Embed Links. Keep them all.</li>
+        <li><strong>Add the bot.</strong> Sign in on the home page and click <strong>Add to Discord</strong> next to your server. Discord asks for View Channels, Send Messages, Send Messages in Threads, Create Public Threads, Create Private Threads, Read Message History, Add Reactions and Embed Links. Keep them all.</li>
         <li><strong>Connect Devin.</strong> Click <strong>Configure</strong>, paste the key and your organization ID (<code>org-…</code>, shown on the same Devin API page), and save. The key is checked with a read-only call first.</li>
         <li><strong>Decide who can use it</strong> on the <a href="#permissions">Permissions</a> page. Out of the box, only members with Administrator can start tasks.</li>
         <li><strong>Try it.</strong> In a channel, send <code>@Devin say hi</code>. A thread opens and Devin answers there.</li>

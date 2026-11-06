@@ -25,7 +25,7 @@ Access is set per server by Discord role on the **Permissions** page:
 | Manage tasks | Stop and sleep any task, and reply to any task |
 | Change settings | Use the setup UI for this server |
 
-The member who started a task can always stop it or put it to sleep. Members with **Administrator** can do everything with no limits until you change the **Administrator** row on the Permissions page; they always keep Change settings, and **Manage Server** can always change settings. Each role can also cap ACUs per task, tasks per user per day and concurrent tasks; a member with several roles gets the most generous limit. The **Channels** page limits where tasks can start and picks the channel task threads open in.
+The member who started a task can always stop it or put it to sleep. Members with **Administrator** can do everything with no limits until you change the **Administrator** row on the Permissions page; they always keep Change settings, and **Manage Server** can always change settings. Each role can also cap ACUs per task, tasks per user per day and concurrent tasks; a member with several roles gets the most generous limit. The **Channels** page limits where tasks can start and picks the channel task threads open in. A task started inside a private thread always gets its own private thread in the same channel, with only the member who started it added, instead of going to that channel.
 
 Tasks are created by the server's Devin service user and tagged `discord`, `discord-guild:<id>` and `discord-user:<id>`. The prompt names the Discord member. A member runs as a Devin user only when the server maps them on the Devin page.
 
@@ -63,7 +63,7 @@ The token decides which server a call is for. The MCP page picks separate Read a
 1. **Discord app.** Create one at https://discord.com/developers/applications. Use a separate app for this bot: on start-up it replaces the app's commands.
    - **Bot:** reset and copy the token. Enable **Message Content Intent**.
    - **OAuth2:** copy the client ID and client secret. Under **Redirects** add `<PUBLIC_URL>/auth/callback`, e.g. `https://devin.example.com/auth/callback`.
-   - **Installation:** set the install link to **None**. Servers add the bot from the setup UI's **Add to Discord** button, which asks for View Channels, Send Messages, Send Messages in Threads, Create Public Threads, Read Message History, Add Reactions and Embed Links.
+   - **Installation:** set the install link to **None**. Servers add the bot from the setup UI's **Add to Discord** button, which asks for View Channels, Send Messages, Send Messages in Threads, Create Public Threads, Create Private Threads, Read Message History, Add Reactions and Embed Links.
 2. **Configure.** `cp .env.example .env`, then fill in `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `MASTER_KEY` (`openssl rand -base64 48`) and `PUBLIC_URL`. Back up `MASTER_KEY`: without it, saved Devin keys can't be read.
 3. **Run:**
 

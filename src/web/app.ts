@@ -37,6 +37,7 @@ import {
   devinPage,
   errorPage,
   landingPage,
+  MAX_CHANNEL_QUERY,
   mcpPage,
   permissionsPage,
   pickerPage,
@@ -514,6 +515,20 @@ export function createWebApp(deps: WebDeps) {
     return c.redirect(`/g/${guild.id}/permissions?saved=1`);
   });
 
+  function channelQuery(c: Context<Env>) {
+    return (c.req.query('q') ?? '').trim().slice(0, MAX_CHANNEL_QUERY);
+  }
+
+  /** After a filtered save, only the channels that were shown may change; null means all of them. */
+  function listScope(form: Form): Set<string> | null {
+    return field(form, 'scoped') ? new Set(fields(form, 'shown')) : null;
+  }
+
+  function savedRedirect(path: string, form: Form) {
+    const query = field(form, 'q').slice(0, MAX_CHANNEL_QUERY);
+    return `${path}?saved=1${query ? `&q=${encodeURIComponent(query)}` : ''}`;
+  }
+
   /** Channel IDs this member may change on the Channels tab; null means all of them. */
   async function editableChannels(c: Context<Env>): Promise<Set<string> | null> {
     const member = c.get('member');
@@ -534,7 +549,8 @@ export function createWebApp(deps: WebDeps) {
         deps.guilds.settings(guild.id)?.taskChannelId ?? null,
         mentionSettings(deps.guilds, guild.id),
         noticeFrom(c),
-        editable
+        editable,
+        channelQuery(c)
       )
     );
   });
@@ -547,12 +563,14 @@ export function createWebApp(deps: WebDeps) {
     // Members who aren't Administrators can't add or remove channels Discord hides from them,
     // since the Allowed list is also the MCP read list's fallback.
     const editable = await editableChannels(c);
+    const scope = listScope(form);
     const canEdit = (id: string) => !editable || editable.has(id);
+    const changeable = (id: string) => canEdit(id) && (!scope || scope.has(id));
     const before = deps.guilds.allowedChannels(guild.id);
-    const submitted = fields(form, 'allowed').filter((id) => names.has(id));
+    const submitted = fields(form, 'allowed').filter((id) => names.has(id) && (!scope || scope.has(id)));
     const ignored = new Set(submitted.filter((id) => !canEdit(id) && !before.includes(id)));
     const allowed = [
-      ...new Set([...submitted.filter(canEdit), ...before.filter((id) => names.has(id) && !canEdit(id))])
+      ...new Set([...submitted.filter(changeable), ...before.filter((id) => names.has(id) && !changeable(id))])
     ];
     const currentTaskChannel = deps.guilds.settings(guild.id)?.taskChannelId ?? null;
     const taskChannel = field(form, 'task_channel');
@@ -568,7 +586,7 @@ export function createWebApp(deps: WebDeps) {
     if (!Number.isInteger(contextMessages) || contextMessages < 0 || contextMessages > MAX_CONTEXT_MESSAGES) {
       const text = `Context messages must be a whole number from 0 to ${MAX_CONTEXT_MESSAGES}.`;
       return c.html(
-        channelsPage(ctx(c).session, guild, channels, allowed, taskChannelId, mentionSettings(deps.guilds, guild.id), { kind: 'error', text }, editable),
+        channelsPage(ctx(c).session, guild, channels, allowed, taskChannelId, mentionSettings(deps.guilds, guild.id), { kind: 'error', text }, editable, field(form, 'q').slice(0, MAX_CHANNEL_QUERY)),
         400
       );
     }
@@ -583,7 +601,7 @@ export function createWebApp(deps: WebDeps) {
       `allowed: ${allowed.map(label).join(', ') || 'all'}; task channel: ${taskChannelId ? label(taskChannelId) : 'source channel'}; context messages: ${contextMessages}; only @mentions forwarded: ${mentionOnlyReplies ? 'yes' : 'no'}` +
         (ignored.size ? `; ignored channels the editor can't view: ${[...ignored].map(label).join(', ')}` : '')
     );
-    return c.redirect(`/g/${guild.id}/channels?saved=1`);
+    return c.redirect(savedRedirect(`/g/${guild.id}/channels`, form));
   });
 
   const mcpUrl = `${deps.publicUrl}/mcp`;
@@ -610,7 +628,8 @@ export function createWebApp(deps: WebDeps) {
         deps.guilds.mcpToken(guild.id),
         null,
         noticeFrom(c),
-        c.get('member').isAdmin
+        c.get('member').isAdmin,
+        channelQuery(c)
       )
     );
   });
@@ -642,8 +661,13 @@ export function createWebApp(deps: WebDeps) {
     const form = (await c.req.parseBody({ all: true })) as Form;
     const { channels } = await mcpChannelSettings(guild.id);
     const names = new Map(channels.map((channel) => [channel.id, channel.name]));
-    const readable = fields(form, 'read').filter((id) => names.has(id));
-    const postable = fields(form, 'post').filter((id) => names.has(id));
+    const scope = listScope(form);
+    const changed = (name: string, before: string[]) => {
+      const inScope = (id: string) => names.has(id) && (!scope || scope.has(id));
+      return [...new Set([...before.filter((id) => names.has(id) && !inScope(id)), ...fields(form, name).filter(inScope)])];
+    };
+    const readable = changed('read', deps.guilds.mcpReadChannels(guild.id));
+    const postable = changed('post', deps.guilds.mcpPostChannels(guild.id));
     const mode = (name: string): McpMode => (field(form, name) === 'bot' ? 'bot' : 'custom');
     const modes = { read: mode('read_mode'), post: mode('post_mode') };
     deps.guilds.setMcpChannels(guild.id, readable, postable, modes);
@@ -655,7 +679,7 @@ export function createWebApp(deps: WebDeps) {
       'mcp.channels',
       `read: ${modes.read === 'bot' ? BOT_SCOPE : readable.map(label).join(', ') || 'Channels tab'}; post: ${modes.post === 'bot' ? BOT_SCOPE : postable.map(label).join(', ') || 'none'}`
     );
-    return c.redirect(`/g/${guild.id}/mcp?saved=1`);
+    return c.redirect(savedRedirect(`/g/${guild.id}/mcp`, form));
   });
 
   app.post('/g/:guildId/mcp/remove', adminOnly, (c) => {

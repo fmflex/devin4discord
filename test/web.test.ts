@@ -106,6 +106,7 @@ test('Discord sign-in sets a state cookie and rejects a callback with the wrong 
   const location = new URL(login.headers.get('location')!);
   assert.equal(location.origin, 'https://discord.com');
   assert.equal(location.searchParams.get('scope'), 'identify guilds');
+  assert.equal(location.searchParams.get('prompt'), null);
   assert.equal(location.searchParams.get('redirect_uri'), `${PUBLIC}/auth/callback`);
   const state = location.searchParams.get('state')!;
   const raw = login.headers.getSetCookie().find((c) => c.startsWith(`${STATE_COOKIE}=`))!;

@@ -13,8 +13,7 @@ export function authorizeUrl(input: { clientId: string; redirectUri: string; sta
     response_type: 'code',
     redirect_uri: input.redirectUri,
     scope: OAUTH_SCOPES,
-    state: input.state,
-    prompt: 'none'
+    state: input.state
   });
   return `https://discord.com/oauth2/authorize?${params}`;
 }

@@ -104,7 +104,7 @@ export const TOOLS = [
   },
   {
     name: 'post_to_channel',
-    description: 'Post a message in a channel this server allows Devin to post in (see list_channels), or in a thread under one. Nobody is pinged. Long text is split into several messages.',
+    description: 'Post a message in a channel this server allows Devin to post in (see list_channels), or in a public thread under one. Nobody is pinged. Long text is split into several messages.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -265,8 +265,9 @@ export function createMcpHandler(deps: McpDeps) {
         if (!channel || channel.guildId !== guildId) throw new ToolError('Channel not found in this server.');
         const postable = deps.guilds.mcpPostChannels(guildId);
         if (
-          !postable.includes(channel.id) &&
-          !(channel.isThread && channel.parentId && postable.includes(channel.parentId))
+          channel.isPrivate ||
+          (!postable.includes(channel.id) &&
+            !(channel.isThread && channel.parentId && postable.includes(channel.parentId)))
         ) {
           throw new ToolError("Devin isn't allowed to post in that channel. A server admin can allow it on the MCP page of the setup site.");
         }

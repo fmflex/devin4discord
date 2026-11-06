@@ -140,7 +140,7 @@ const SECTIONS: Section[] = [
           <tr><td><code>post_to_channel</code></td><td>Post in a channel ticked under Post</td></tr>
         </tbody>
       </table>
-      <p><strong>What it can reach:</strong> the Read and Post lists on the MCP page. Read follows the Channels page's Allowed list when nothing is ticked (and only channels <code>@everyone</code> can see when that's empty too). Post is off until you tick something. Private threads are never readable. Posts never ping anyone.</p>
+      <p><strong>What it can reach:</strong> the Read and Post lists on the MCP page. Read follows the Channels page's Allowed list when nothing is ticked (and only channels <code>@everyone</code> can see when that's empty too). Post is off until you tick something. Private threads are never readable or postable. Posts never ping anyone.</p>
       <p><strong>Task threads</strong> need more than the token: each task started while a token exists gets its own task key in its prompt, so a Devin session can only work in its own thread.</p>
       <p>Anyone with the token can read and post where it's allowed. Keep it in Devin only, and generate a new one if it leaks.</p>
       <p>${doc(DOCS.mcp, 'Devin docs: MCP servers')}</p>`

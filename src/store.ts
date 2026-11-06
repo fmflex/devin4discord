@@ -119,6 +119,11 @@ export class TaskStore {
     return raw ? fromRaw(raw as Raw) : null;
   }
 
+  /** Unlinks the task from its source message, so that message can start a new task. */
+  releaseSource(taskId: string) {
+    this.db.prepare('update tasks set source_message_id = null, updated_at = ? where task_id = ?').run(Date.now(), taskId);
+  }
+
   active(): TaskRow[] {
     return (
       this.db.prepare('select * from tasks where active = 1 order by updated_at').all() as Raw[]

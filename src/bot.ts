@@ -307,7 +307,7 @@ export class Bot {
       return deny('channel', "Devin isn't enabled in this channel.");
     }
     if (request.kind !== 'prompt') {
-      const existing = this.tasks.bySourceMessage(request.message.id);
+      const existing = await this.bridge.taskForMessage(request.message.id);
       if (existing) {
         return { ok: true, started: false, reply: `That message already has a task: <#${existing.threadId}>` };
       }

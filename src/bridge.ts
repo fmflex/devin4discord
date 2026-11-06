@@ -253,12 +253,18 @@ export class Bridge {
     this.syncing.add(row.taskId);
     try {
       const update = await devin.getUpdate(row.taskId, row.cursor);
-      for (const message of update.messages) {
-        await this.relay(devin, row, message);
-        this.store.update(row.taskId, { cursor: message.id });
-      }
       const known = new Set(row.pullRequests);
       const pullRequests = [...row.pullRequests];
+      for (const message of update.messages) {
+        // A new PR Devin links in its own message is announced by pinging on that message.
+        const linked = update.pullRequests.filter((url) => !known.has(url) && message.text.includes(url));
+        await this.relay(devin, row, message, linked.length ? row.openerId : undefined);
+        for (const url of linked) {
+          known.add(url);
+          pullRequests.push(url);
+        }
+        this.store.update(row.taskId, { cursor: message.id, ...(linked.length ? { pullRequests } : {}) });
+      }
       for (const url of update.pullRequests) {
         if (known.has(url)) continue;
         await this.post(row.threadId, `**Pull request:** ${url}`, row.openerId);
@@ -287,7 +293,7 @@ export class Bridge {
   }
 
   /** Posts a Devin message with its attached files uploaded to Discord. */
-  private async relay(devin: DevinApi, row: TaskRow, message: AgentMessage) {
+  private async relay(devin: DevinApi, row: TaskRow, message: AgentMessage, pingUserId?: string) {
     const files: DownloadedFile[] = [];
     const missing: string[] = [];
     for (const file of message.files) {
@@ -302,7 +308,7 @@ export class Bridge {
     if (missing.length) {
       lines.push(`_Couldn't upload ${missing.map((name) => `\`${name}\``).join(', ')}; see ${row.url}_`);
     }
-    await this.post(row.threadId, lines.join('\n\n'), undefined, undefined, files);
+    await this.post(row.threadId, lines.join('\n\n'), pingUserId, undefined, files);
   }
 
   private async post(

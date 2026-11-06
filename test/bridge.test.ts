@@ -310,3 +310,37 @@ test('sync uploads the files Devin attached and links the session for ones it ca
     { channelId: 'thread-1', content: '**Devin:**', files: ['only.png:bytes of u2'] }
   ]);
 });
+
+test('a PR Devin links in its message pings on that message instead of a second post', async () => {
+  const t = setup();
+  await t.bridge.start({ kind: 'prompt', ...base, channelId: 'chan', task: 'Fix it', attachments: [] });
+  t.sent.length = 0;
+  t.updates.set(
+    'task-1',
+    update({
+      messages: [{ id: 'e1', text: 'Fixed in https://github.com/acme/app/pull/7.', files: [] }],
+      cursor: 'e1',
+      pullRequests: ['https://github.com/acme/app/pull/7', 'https://github.com/acme/app/pull/8']
+    })
+  );
+  await t.bridge.syncAll();
+  assert.deepEqual(t.sent, [
+    { channelId: 'thread-1', content: '<@10> **Devin:** Fixed in https://github.com/acme/app/pull/7.', ping: '10' },
+    { channelId: 'thread-1', content: '<@10> **Pull request:** https://github.com/acme/app/pull/8', ping: '10' }
+  ]);
+  assert.deepEqual(t.store.byThread('thread-1')?.pullRequests, [
+    'https://github.com/acme/app/pull/7',
+    'https://github.com/acme/app/pull/8'
+  ]);
+  t.sent.length = 0;
+  t.updates.set(
+    'task-1',
+    update({
+      messages: [{ id: 'e2', text: 'Still https://github.com/acme/app/pull/7', files: [] }],
+      cursor: 'e2',
+      pullRequests: ['https://github.com/acme/app/pull/7', 'https://github.com/acme/app/pull/8']
+    })
+  );
+  await t.bridge.syncAll();
+  assert.deepEqual(t.sent, [{ channelId: 'thread-1', content: '**Devin:** Still https://github.com/acme/app/pull/7' }]);
+});

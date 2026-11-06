@@ -2,7 +2,7 @@ import { html } from 'hono/html';
 import { DEFAULT_INSTRUCTIONS } from '../format.ts';
 import { MAX_CONTEXT_MESSAGES } from '../guilds.ts';
 import type { WebSession } from './sessions.ts';
-import { DOCS, REPO_URL, doc, layout } from './views.ts';
+import { COMMUNITY_URL, DOCS, REPO_URL, doc, layout } from './views.ts';
 
 type Html = ReturnType<typeof html>;
 
@@ -179,7 +179,7 @@ const SECTIONS: Section[] = [
         <dt>Saving the Devin key fails.</dt>
         <dd>Make sure it's a <strong>service user</strong> key, the organization ID matches, and the service user has the roles listed in <a href="#getting-started">Getting started</a>.</dd>
       </dl>
-      <p>Still stuck? Open an issue on ${doc(`${REPO_URL}/issues`, 'GitHub')}.</p>`
+      <p>Still stuck? Ask in the ${doc(COMMUNITY_URL, 'devin4discord Discord community')} or open an issue on ${doc(`${REPO_URL}/issues`, 'GitHub')}.</p>`
   }
 ];
 

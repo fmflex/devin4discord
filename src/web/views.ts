@@ -585,17 +585,17 @@ export function auditPage(
     body: html`<section class="card wide">
       <h2>Audit log</h2>
       ${entries.length
-        ? html`<table class="grid">
+        ? html`<div class="scroll"><table class="grid audit">
             <thead><tr><th>When (UTC)</th><th>Who</th><th>What</th><th>Details</th></tr></thead>
             <tbody>${entries.map(
               (entry) => html`<tr>
                 <td class="nowrap">${new Date(entry.createdAt).toISOString().replace('T', ' ').slice(0, 19)}</td>
                 <td>${entry.actorName} <span class="muted small">${entry.actorId}</span></td>
                 <td><code>${entry.action}</code></td>
-                <td>${entry.detail}</td>
+                <td class="detail">${entry.detail}</td>
               </tr>`
             )}</tbody>
-          </table>`
+          </table></div>`
         : html`<p class="muted">Nothing yet.</p>`}
     </section>`
   });
@@ -679,6 +679,7 @@ form:has(.only-ticked:checked) tbody:not(:has(input[name]:checked)){display:none
 .help .tip{position:absolute;z-index:10;top:24px;left:-10px;width:320px;max-width:80vw;padding:10px 14px;background:#111214;border:1px solid var(--line);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.5);color:var(--text);line-height:1.45;white-space:normal;text-align:left}
 .help.end .tip{left:auto;right:-10px}.help .tip p{margin:0 0 8px}.help .tip p:last-child{margin:0}
 .grid td.role{white-space:nowrap}
+.grid.audit td{vertical-align:top}.grid.audit td.detail{overflow-wrap:anywhere}
 .steps{padding-left:20px;margin:6px 0}.steps li{margin:4px 0}code.token{display:inline-block;margin-top:6px;word-break:break-all;user-select:all}h3{font-size:15px;margin:18px 0 6px}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px}
 `;
 

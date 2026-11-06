@@ -373,6 +373,34 @@ test('MCP read and post channels are configured together with admin opt-in', asy
   const savedPage = await (await t.request(`/g/${G}/mcp`, { headers: { cookie: session } })).text();
   assert.match(savedPage, /name="read" value="400000000000000001"[^>]*checked/);
   assert.match(savedPage, /name="post" value="400000000000000001"[^>]*checked/);
+  assert.match(savedPage, /name="read_mode" value="custom" checked/);
+  assert.match(savedPage, /name="post_mode" value="custom" checked/);
+
+  const botMode = new URLSearchParams([
+    ['_csrf', csrf],
+    ['read_mode', 'bot'],
+    ['post_mode', 'bot'],
+    ['read', '400000000000000001']
+  ]);
+  const switched = await t.request(path, {
+    method: 'POST',
+    headers: { cookie: session, origin: PUBLIC, 'content-type': 'application/x-www-form-urlencoded' },
+    body: botMode
+  });
+  assert.equal(switched.status, 302);
+  assert.deepEqual(t.guilds.mcpModes(G), { read: 'bot', post: 'bot' });
+  assert.deepEqual(t.guilds.mcpReadChannels(G), ['400000000000000001']);
+  assert.equal(
+    t.guilds.auditLog(G)[0].detail,
+    "read: wherever the bot's Discord permissions allow; post: wherever the bot's Discord permissions allow"
+  );
+  const botPage = await (await t.request(`/g/${G}/mcp`, { headers: { cookie: session } })).text();
+  assert.match(botPage, /name="read_mode" value="bot" checked/);
+  assert.match(botPage, /name="post_mode" value="bot" checked/);
+  assert.match(botPage, /Reading: every channel the bot can read in Discord\. The Read ticks are kept but not used\./);
+
+  await post(t, path, session, { _csrf: csrf, read_mode: 'everything', post_mode: 'bot' });
+  assert.deepEqual(t.guilds.mcpModes(G), { read: 'custom', post: 'bot' });
 });
 
 test('/mcp skips the cookie session and CSRF checks but needs a token', async () => {
@@ -536,6 +564,8 @@ test('a role-granted settings holder can view but not change permissions, the De
     assert.equal(t.guilds.mcpToken(G), null);
     assert.equal((await post(t, `/g/${G}/mcp/channels`, session, { _csrf: csrf, read: '400000000000000001' })).status, 403);
     assert.deepEqual(t.guilds.mcpReadChannels(G), []);
+    assert.equal((await post(t, `/g/${G}/mcp/channels`, session, { _csrf: csrf, read_mode: 'bot', post_mode: 'bot' })).status, 403);
+    assert.deepEqual(t.guilds.mcpModes(G), { read: 'custom', post: 'custom' });
     assert.equal((await post(t, `/g/${G}/mcp/remove`, session, { _csrf: csrf })).status, 403);
   }
   assert.equal(t.guilds.auditLog(G).length, before);

@@ -121,7 +121,11 @@ export const MIGRATIONS: string[] = [
 
   // 7: per-task MCP key (hash only), so task-thread tools reach only the session they were handed to.
   `alter table tasks add column mcp_key_hash text;
-   create unique index tasks_mcp_key_idx on tasks (mcp_key_hash);`
+   create unique index tasks_mcp_key_idx on tasks (mcp_key_hash);`,
+
+  // 8: MCP read/post scope: 'custom' (the lists above) or 'bot' (wherever the bot's Discord permissions allow).
+  `alter table guilds add column mcp_read_mode text not null default 'custom';
+   alter table guilds add column mcp_post_mode text not null default 'custom';`
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

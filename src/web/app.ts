@@ -56,6 +56,8 @@ const ASSETS: Record<string, Uint8Array<ArrayBuffer>> = Object.fromEntries(
 
 export const SESSION_COOKIE = 'd4d_session';
 export const STATE_COOKIE = 'd4d_oauth_state';
+const SNOWFLAKE = /^\d{15,22}$/;
+const GUILD_JOIN_WAIT_MS = 5000;
 /** Every setup form is a few fields of text; anything bigger is rejected before it is read in full. */
 export const MAX_FORM_BYTES = 64 * 1024;
 
@@ -256,11 +258,39 @@ export function createWebApp(deps: WebDeps) {
 
   app.get('/healthz', (c) => c.text('ok'));
 
-  app.get('/auth/login', async (c) => {
+  async function beginOAuth(c: Context<Env>) {
     const state = randomToken();
     await setSignedCookie(c, STATE_COOKIE, state, secret, { ...COOKIE_OPTIONS, maxAge: 600 });
+    return state;
+  }
+
+  app.get('/auth/login', async (c) => {
+    const state = await beginOAuth(c);
     return c.redirect(authorizeUrl({ clientId: deps.discordClientId, redirectUri, state }));
   });
+
+  app.get('/auth/invite', async (c) => {
+    const guild = c.req.query('guild');
+    const state = await beginOAuth(c);
+    return c.redirect(
+      inviteUrl({
+        clientId: deps.discordClientId,
+        permissions: deps.botPermissions,
+        redirectUri,
+        state,
+        guildId: guild && SNOWFLAKE.test(guild) ? guild : undefined
+      })
+    );
+  });
+
+  // Discord adds the bot before redirecting, but the gateway's guild event can land a moment later.
+  async function botJoined(guildId: string) {
+    for (let waited = 0; waited < GUILD_JOIN_WAIT_MS; waited += 250) {
+      if (deps.directory.hasGuild(guildId)) return true;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return deps.directory.hasGuild(guildId);
+  }
 
   async function startSession(c: Context<Env>, identity: DiscordIdentity) {
     const old = c.get('sessionId');
@@ -280,7 +310,7 @@ export function createWebApp(deps: WebDeps) {
     }
     const code = c.req.query('code');
     if (!code) {
-      return c.html(errorPage(null, 'Sign-in cancelled', 'Discord did not complete the sign-in.'), 400);
+      return c.html(errorPage(c.get('session'), 'Cancelled', 'Discord did not finish. Nothing was changed.'), 400);
     }
     let identity: DiscordIdentity;
     try {
@@ -295,6 +325,10 @@ export function createWebApp(deps: WebDeps) {
       return c.html(errorPage(null, 'Sign-in failed', 'Discord rejected the sign-in. Try again.'), 502);
     }
     await startSession(c, identity);
+    const added = c.req.query('guild_id');
+    if (added && SNOWFLAKE.test(added) && identity.guilds.some((g) => g.id === added) && (await botJoined(added))) {
+      return c.redirect(`/g/${added}/devin`);
+    }
     return c.redirect('/');
   });
 
@@ -315,7 +349,7 @@ export function createWebApp(deps: WebDeps) {
 
   app.get('/', async (c) => {
     const session = c.get('session');
-    if (!session) return c.html(landingPage({ invite: inviteUrl(deps.discordClientId, deps.botPermissions), publicUrl: deps.publicUrl }));
+    if (!session) return c.html(landingPage({ invite: '/auth/invite', publicUrl: deps.publicUrl }));
     const rows: PickerRow[] = [];
     for (const guild of session.guilds) {
       const row = {
@@ -323,7 +357,7 @@ export function createWebApp(deps: WebDeps) {
         name: guild.name,
         icon: guild.icon,
         configured: false,
-        inviteUrl: inviteUrl(deps.discordClientId, deps.botPermissions, guild.id)
+        inviteUrl: `/auth/invite?guild=${guild.id}`
       };
       if (deps.directory.hasGuild(guild.id)) {
         const member = await deps.directory.member(guild.id, session.userId).catch(() => null);
@@ -335,7 +369,7 @@ export function createWebApp(deps: WebDeps) {
       }
     }
     rows.sort((a, b) => (a.action === b.action ? a.name.localeCompare(b.name) : a.action === 'configure' ? -1 : 1));
-    return c.html(pickerPage(session, rows, inviteUrl(deps.discordClientId, deps.botPermissions)));
+    return c.html(pickerPage(session, rows, '/auth/invite'));
   });
 
   // Every /g/:guildId page: signed in, bot in the server, and the bot confirms the user may configure it.
@@ -343,7 +377,7 @@ export function createWebApp(deps: WebDeps) {
     const session = c.get('session');
     if (!session) return c.redirect('/');
     const guildId = c.req.param('guildId') ?? '';
-    if (!/^\d{15,22}$/.test(guildId) || !deps.directory.hasGuild(guildId)) {
+    if (!SNOWFLAKE.test(guildId) || !deps.directory.hasGuild(guildId)) {
       return c.html(errorPage(session, 'Server not found', 'The bot is not in that server.'), 404);
     }
     const member = await deps.directory.member(guildId, session.userId);

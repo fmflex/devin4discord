@@ -133,6 +133,38 @@ test('Discord sign-in sets a state cookie and rejects a callback with the wrong 
   assert.match(picker, /Configure/);
 });
 
+test('Add to Discord goes through the callback and lands on the new server', async () => {
+  const t = setup();
+  const invite = await t.request(`/auth/invite?guild=${G}`);
+  assert.equal(invite.status, 302);
+  const location = new URL(invite.headers.get('location')!);
+  assert.equal(location.origin, 'https://discord.com');
+  assert.equal(location.searchParams.get('scope'), 'bot applications.commands identify guilds');
+  assert.equal(location.searchParams.get('response_type'), 'code');
+  assert.equal(location.searchParams.get('redirect_uri'), `${PUBLIC}/auth/callback`);
+  assert.equal(location.searchParams.get('permissions'), '1');
+  assert.equal(location.searchParams.get('guild_id'), G);
+  assert.equal(location.searchParams.get('disable_guild_select'), 'true');
+  const state = location.searchParams.get('state')!;
+  const stateCookie = cookie(invite, STATE_COOKIE)!;
+  assert.ok(stateCookie);
+
+  const any = new URL((await t.request('/auth/invite?guild=nope')).headers.get('location')!);
+  assert.equal(any.searchParams.get('guild_id'), null);
+
+  const cancelled = await t.request(`/auth/callback?error=access_denied&state=${state}`, { headers: { cookie: stateCookie } });
+  assert.equal(cancelled.status, 400);
+  assert.equal(t.calls.length, 0);
+
+  t.responses.set('POST /api/v10/oauth2/token', { status: 200, body: { access_token: 'at', token_type: 'Bearer' } });
+  t.responses.set('GET /api/v10/users/@me', { status: 200, body: { id: USER, username: 'dev', avatar: null } });
+  t.responses.set('GET /api/v10/users/@me/guilds', { status: 200, body: [{ id: G, name: 'Test', icon: null, owner: true, permissions: '0' }] });
+  const ok = await t.request(`/auth/callback?code=c&state=${state}&guild_id=${G}&permissions=1`, { headers: { cookie: stateCookie } });
+  assert.equal(ok.status, 302);
+  assert.equal(ok.headers.get('location'), `/g/${G}/devin`);
+  assert.ok(cookie(ok, SESSION_COOKIE));
+});
+
 test('forms are rejected without the CSRF token or from another origin', async () => {
   const t = setup();
   const { session, csrf } = await signIn(t);
@@ -625,7 +657,7 @@ test('the landing page, docs and images are public', async () => {
   const home = await t.request('/');
   assert.equal(home.status, 200);
   const page = await home.text();
-  assert.match(page, /https:\/\/discord\.com\/oauth2\/authorize\?[^"]*scope=bot/);
+  assert.match(page, /href="\/auth\/invite"/);
   assert.match(page, /href="\/auth\/login"/);
   assert.match(page, new RegExp(`og:image" content="${PUBLIC}/assets/avatar.png"`));
   const docs = await t.request('/docs');

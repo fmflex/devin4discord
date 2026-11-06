@@ -62,10 +62,22 @@ export function discordChat(client: Client): ChatPort {
   }
 
   return {
-    async createTaskThread(channelId, title, intro) {
+    async createTaskThread(channelId, title, intro, options) {
       let channel = await fetchChannel(channelId);
+      const isPrivate = Boolean(options?.private) || channel.type === ChannelType.PrivateThread;
       if (channel.isThread() && channel.parent) channel = channel.parent;
       const name = title.slice(0, 100);
+      if (isPrivate) {
+        if (channel.type !== ChannelType.GuildText) throw new Error('Private task threads need a text channel.');
+        const thread = await channel.threads.create({
+          name,
+          type: ChannelType.PrivateThread,
+          invitable: false,
+          autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek
+        });
+        await thread.send({ content: intro, allowedMentions: { parse: [] } });
+        return thread.id;
+      }
       if (channel.type === ChannelType.GuildForum) {
         const thread = await channel.threads.create({
           name,
@@ -131,6 +143,7 @@ export const BOT_PERMISSIONS =
   PermissionFlagsBits.SendMessages |
   PermissionFlagsBits.SendMessagesInThreads |
   PermissionFlagsBits.CreatePublicThreads |
+  PermissionFlagsBits.CreatePrivateThreads |
   PermissionFlagsBits.ReadMessageHistory |
   PermissionFlagsBits.AddReactions |
   PermissionFlagsBits.EmbedLinks;
@@ -196,7 +209,9 @@ export async function canSeeThread(member: GuildMember, threadId: string): Promi
 }
 
 function channelRef(channel: Channel | null, fallbackId: string): ChannelRef {
-  if (channel?.isThread()) return { id: channel.id, parentId: channel.parentId };
+  if (channel?.isThread()) {
+    return { id: channel.id, parentId: channel.parentId, isPrivate: channel.type === ChannelType.PrivateThread };
+  }
   return { id: channel?.id ?? fallbackId, parentId: null };
 }
 

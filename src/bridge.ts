@@ -20,8 +20,11 @@ export type ChatButton = { customId: string; label: string; style: 'danger' | 's
 
 /** The Discord operations the bridge needs; implemented with discord.js. */
 export interface ChatPort {
-  /** Posts `intro` in the channel and opens a thread on it. */
-  createTaskThread(channelId: string, title: string, intro: string): Promise<string>;
+  /**
+   * Posts `intro` in the channel and opens a thread on it. With `private`, or when `channelId` is a
+   * private thread, it opens a private thread in the parent instead and posts `intro` inside it.
+   */
+  createTaskThread(channelId: string, title: string, intro: string, options?: { private?: boolean }): Promise<string>;
   /** Opens a thread on an existing message, e.g. the one that @mentioned the bot. */
   createThreadOnMessage(channelId: string, messageId: string, title: string): Promise<string>;
   addThreadMember(threadId: string, userId: string): Promise<void>;
@@ -36,6 +39,8 @@ export type StartRequest = {
   channelId: string;
   instructions: string;
   maxAcu: number | null;
+  /** The request came from a private thread, so the task thread must be private too. */
+  privateThread?: boolean;
   /** The server has an MCP token, so the session gets its own task key for the task-thread tools. */
   mcpTools?: boolean;
 } & (
@@ -134,7 +139,12 @@ export class Bridge {
       threadId = await this.chat.createThreadOnMessage(request.channelId, request.message.id, `Devin: ${title}`);
       await this.post(threadId, intro);
     } else {
-      threadId = await this.chat.createTaskThread(request.channelId, `Devin: ${title}`, intro);
+      threadId = await this.chat.createTaskThread(
+        request.channelId,
+        `Devin: ${title}`,
+        intro,
+        request.privateThread ? { private: true } : undefined
+      );
     }
     this.store.insert({
       taskId: task.id,

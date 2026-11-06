@@ -152,8 +152,12 @@ function botSetup() {
   const sent: { channelId: string; content: string }[] = [];
   const threadsOnMessage: { channelId: string; messageId: string; title: string }[] = [];
   let next = 1;
+  let gate: Promise<void> | null = null;
+  let failStarts = false;
   const devin: DevinApi = {
     async startTask(input) {
+      if (gate) await gate;
+      if (failStarts) throw new Error('Devin API down');
       started.push(input);
       const id = `task-${next++}`;
       return { id, url: `https://devin.test/${id}` };
@@ -174,10 +178,11 @@ function botSetup() {
       controls.push(`unarchive ${taskId}`);
     }
   };
-  let threads = 0;
+  const taskThreads: { channelId: string; private: boolean }[] = [];
   const chat: ChatPort = {
-    async createTaskThread() {
-      return `thread-${++threads}`;
+    async createTaskThread(channelId, _title, _intro, options) {
+      taskThreads.push({ channelId, private: Boolean(options?.private) });
+      return `thread-${taskThreads.length}`;
     },
     async createThreadOnMessage(channelId, messageId, title) {
       threadsOnMessage.push({ channelId, messageId, title });
@@ -210,8 +215,19 @@ function botSetup() {
     controls,
     sent,
     threadsOnMessage,
+    taskThreads,
     configure,
-    advance: (ms: number) => (now += ms)
+    advance: (ms: number) => (now += ms),
+    /** Holds every Devin `startTask` call until the returned function is called. */
+    holdStarts: () => {
+      let release!: () => void;
+      gate = new Promise((resolve) => (release = resolve));
+      return () => {
+        gate = null;
+        release();
+      };
+    },
+    failStarts: (fail: boolean) => (failStarts = fail)
   };
 }
 
@@ -265,6 +281,42 @@ test('triggers are gated by role permissions, channels and limits', async () => 
   assert.equal((await t.bot.startFromPrompt(G, mod, { id: 'thread-x', parentId: 'c2' }, 'x', [])).ok, true);
 });
 
+test('concurrent starts cannot exceed the per-day or concurrent limits', async () => {
+  const t = botSetup();
+  t.configure();
+  const helper = member({ id: '2', roleIds: [G, HELPER] });
+  let release = t.holdStarts();
+  const burst = Array.from({ length: 5 }, (_, i) => t.bot.startFromPrompt(G, helper, channel, `p${i}`, []));
+  release();
+  const outcomes = await Promise.all(burst);
+  assert.equal(outcomes.filter((o) => o.ok && o.started).length, 1, 'concurrentTasks: 1');
+  assert.equal(outcomes.filter((o) => !o.ok && o.reason === 'limit').length, 4);
+
+  const daily = 'Daily';
+  t.guilds.setRoleRules(G, [
+    ...rules,
+    { roleId: daily, permissions: ['start_tasks'], limits: { maxAcu: 5, tasksPerDay: 2, concurrentTasks: null } }
+  ]);
+  const dailyMember = member({ id: '4', roleIds: [G, daily] });
+  release = t.holdStarts();
+  const mentions = Array.from({ length: 5 }, (_, i) => incoming(t, dailyMember, `<@${BOT}> m${i}`).outcome);
+  release();
+  const mentioned = await Promise.all(mentions);
+  assert.equal(mentioned.filter((o) => o.action === 'started').length, 2, 'tasksPerDay: 2');
+  assert.equal(t.tasks.countStartedSince(G, '4', 0), 2);
+});
+
+test('a failed start releases its reserved slot', async () => {
+  const t = botSetup();
+  t.configure();
+  const helper = member({ id: '2', roleIds: [G, HELPER] });
+  t.failStarts(true);
+  await assert.rejects(t.bot.startFromPrompt(G, helper, channel, 'one', []), /Devin API down/);
+  t.failStarts(false);
+  const retry = await t.bot.startFromPrompt(G, helper, channel, 'one', []);
+  assert.equal(retry.ok && retry.started, true);
+});
+
 test('/devin list only shows tasks in threads the member can see', async () => {
   const t = botSetup();
   t.configure();
@@ -315,7 +367,7 @@ function incoming(
   t: ReturnType<typeof botSetup>,
   who: MemberSnapshot,
   content: string,
-  overrides: { channel?: { id: string; parentId: string | null }; id?: string; isReply?: boolean } = {}
+  overrides: { channel?: { id: string; parentId: string | null; isPrivate?: boolean }; id?: string; isReply?: boolean } = {}
 ) {
   const limits: number[] = [];
   const outcome = t.bot.handleMessage({
@@ -585,4 +637,27 @@ test('with an MCP token, each task gets its own MCP task key in the prompt', asy
   const owners = keys.map((key) => t.tasks.byMcpKey(sha256(key!))?.title);
   assert.deepEqual(owners, ['one', 'two']);
   assert.equal(t.tasks.byMcpKey(sha256(token.token)), null);
+});
+
+test('tasks started in a private thread stay in a private thread, even with a task channel', async () => {
+  const t = botSetup();
+  t.configure();
+  t.guilds.setChannels(G, [], 'tasks');
+  const helper = member({ id: '2', roleIds: [G, HELPER] });
+  const privateThread = { id: 'secret-thread', parentId: 'c1', isPrivate: true };
+
+  assert.equal((await t.bot.startFromMessage(G, helper, privateThread, message)).ok, true);
+  t.tasks.update('task-1', { active: false });
+  const mention = await incoming(t, helper, `<@${BOT}> summarize this`, { channel: privateThread, id: 'm2' }).outcome;
+  assert.equal(mention.action, 'started');
+  t.tasks.update('task-2', { active: false });
+  t.advance(25 * 60 * 60 * 1000);
+  assert.equal((await t.bot.startFromPrompt(G, helper, { id: 'public-thread', parentId: 'c1' }, 'x', [])).ok, true);
+
+  assert.deepEqual(t.taskThreads, [
+    { channelId: 'secret-thread', private: true },
+    { channelId: 'secret-thread', private: true },
+    { channelId: 'tasks', private: false }
+  ]);
+  assert.equal(t.threadsOnMessage.length, 0);
 });

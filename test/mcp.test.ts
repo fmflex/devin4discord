@@ -169,6 +169,10 @@ test('MCP channel posting is opt-in for channels and their threads', async () =>
   assert.ok(!thread.isError);
   assert.deepEqual(t.sent.map((message) => message.channelId), [GENERAL, SUB_THREAD]);
 
+  const privateThread = await t.tool('post_to_channel', { channel_id: PRIVATE_THREAD, content: 'no' });
+  assert.equal(privateThread.isError, true);
+  assert.equal(t.sent.length, 2);
+
   const secret = await t.tool('post_to_channel', { channel_id: SECRET_CH, content: 'no' });
   assert.equal(secret.isError, true);
   const otherGuild = await t.tool('post_to_channel', { channel_id: OTHER_THREAD, content: 'no' });

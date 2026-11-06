@@ -152,8 +152,12 @@ function botSetup() {
   const sent: { channelId: string; content: string }[] = [];
   const threadsOnMessage: { channelId: string; messageId: string; title: string }[] = [];
   let next = 1;
+  let gate: Promise<void> | null = null;
+  let failStarts = false;
   const devin: DevinApi = {
     async startTask(input) {
+      if (gate) await gate;
+      if (failStarts) throw new Error('Devin API down');
       started.push(input);
       const id = `task-${next++}`;
       return { id, url: `https://devin.test/${id}` };
@@ -211,7 +215,17 @@ function botSetup() {
     sent,
     threadsOnMessage,
     configure,
-    advance: (ms: number) => (now += ms)
+    advance: (ms: number) => (now += ms),
+    /** Holds every Devin `startTask` call until the returned function is called. */
+    holdStarts: () => {
+      let release!: () => void;
+      gate = new Promise((resolve) => (release = resolve));
+      return () => {
+        gate = null;
+        release();
+      };
+    },
+    failStarts: (fail: boolean) => (failStarts = fail)
   };
 }
 
@@ -263,6 +277,42 @@ test('triggers are gated by role permissions, channels and limits', async () => 
   const wrongChannel = await t.bot.startFromPrompt(G, mod, channel, 'x', []);
   assert.equal(wrongChannel.ok === false && wrongChannel.reason, 'channel');
   assert.equal((await t.bot.startFromPrompt(G, mod, { id: 'thread-x', parentId: 'c2' }, 'x', [])).ok, true);
+});
+
+test('concurrent starts cannot exceed the per-day or concurrent limits', async () => {
+  const t = botSetup();
+  t.configure();
+  const helper = member({ id: '2', roleIds: [G, HELPER] });
+  let release = t.holdStarts();
+  const burst = Array.from({ length: 5 }, (_, i) => t.bot.startFromPrompt(G, helper, channel, `p${i}`, []));
+  release();
+  const outcomes = await Promise.all(burst);
+  assert.equal(outcomes.filter((o) => o.ok && o.started).length, 1, 'concurrentTasks: 1');
+  assert.equal(outcomes.filter((o) => !o.ok && o.reason === 'limit').length, 4);
+
+  const daily = 'Daily';
+  t.guilds.setRoleRules(G, [
+    ...rules,
+    { roleId: daily, permissions: ['start_tasks'], limits: { maxAcu: 5, tasksPerDay: 2, concurrentTasks: null } }
+  ]);
+  const dailyMember = member({ id: '4', roleIds: [G, daily] });
+  release = t.holdStarts();
+  const mentions = Array.from({ length: 5 }, (_, i) => incoming(t, dailyMember, `<@${BOT}> m${i}`).outcome);
+  release();
+  const mentioned = await Promise.all(mentions);
+  assert.equal(mentioned.filter((o) => o.action === 'started').length, 2, 'tasksPerDay: 2');
+  assert.equal(t.tasks.countStartedSince(G, '4', 0), 2);
+});
+
+test('a failed start releases its reserved slot', async () => {
+  const t = botSetup();
+  t.configure();
+  const helper = member({ id: '2', roleIds: [G, HELPER] });
+  t.failStarts(true);
+  await assert.rejects(t.bot.startFromPrompt(G, helper, channel, 'one', []), /Devin API down/);
+  t.failStarts(false);
+  const retry = await t.bot.startFromPrompt(G, helper, channel, 'one', []);
+  assert.equal(retry.ok && retry.started, true);
 });
 
 test('/devin list only shows tasks in threads the member can see', async () => {

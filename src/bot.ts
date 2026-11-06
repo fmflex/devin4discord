@@ -85,6 +85,8 @@ export class Bot {
   private readonly tasks: TaskStore;
   private readonly publicUrl: string;
   private readonly now: () => number;
+  /** Starts that passed the limit check but whose task row isn't written yet, per `guild:member`. */
+  private readonly pendingStarts = new Map<string, number>();
 
   constructor(options: {
     bridge: Bridge;
@@ -311,21 +313,41 @@ export class Bot {
       }
     }
     const limits = startLimits(member, this.guilds.roleRules(guildId));
+    const pendingKey = `${guildId}:${member.id}`;
+    const pending = this.pendingStarts.get(pendingKey) ?? 0;
     if (
       limits.tasksPerDay !== null &&
-      this.tasks.countStartedSince(guildId, member.id, this.now() - DAY_MS) >= limits.tasksPerDay
+      this.tasks.countStartedSince(guildId, member.id, this.now() - DAY_MS) + pending >= limits.tasksPerDay
     ) {
       return deny('limit', `You've reached your limit of ${limits.tasksPerDay} tasks per day.`);
     }
     if (
       limits.concurrentTasks !== null &&
-      this.tasks.countActive(guildId, member.id) >= limits.concurrentTasks
+      this.tasks.countActive(guildId, member.id) + pending >= limits.concurrentTasks
     ) {
       return deny(
         'limit',
         `You already have ${limits.concurrentTasks} running tasks. Wait for one to finish.`
       );
     }
+    // Reserve the slot before any await so concurrent starts can't all pass the same count.
+    this.pendingStarts.set(pendingKey, pending + 1);
+    try {
+      return await this.startReserved(guildId, member, channel, request, limits);
+    } finally {
+      const left = (this.pendingStarts.get(pendingKey) ?? 1) - 1;
+      if (left > 0) this.pendingStarts.set(pendingKey, left);
+      else this.pendingStarts.delete(pendingKey);
+    }
+  }
+
+  private async startReserved(
+    guildId: string,
+    member: MemberSnapshot,
+    channel: ChannelRef,
+    request: StartInput,
+    limits: ReturnType<typeof startLimits>
+  ): Promise<Outcome> {
     const settings = this.guilds.settings(guildId);
     const common = {
       guildId,

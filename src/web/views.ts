@@ -3,6 +3,7 @@ import { html, raw } from 'hono/html';
 import type { ChannelInfo, RoleInfo } from '../directory.ts';
 import { DEFAULT_INSTRUCTIONS } from '../format.ts';
 import { MAX_CONTEXT_MESSAGES, type AuditEntry, type McpModes } from '../guilds.ts';
+import { RETENTION_DAYS } from '../retention.ts';
 
 export type MentionSettings = { contextMessages: number; mentionOnlyReplies: boolean };
 import { ADMIN_ROLE, PERMISSIONS, PERMISSION_LABELS, adminRule, type RoleRule } from '../permissions.ts';
@@ -584,6 +585,7 @@ export function auditPage(
     guild: { ...guild, tab: 'audit' },
     body: html`<section class="card wide">
       <h2>Audit log</h2>
+      <p class="muted">Entries are kept for ${RETENTION_DAYS} days.</p>
       ${entries.length
         ? html`<div class="scroll"><table class="grid audit">
             <thead><tr><th>When (UTC)</th><th>Who</th><th>What</th><th>Details</th></tr></thead>

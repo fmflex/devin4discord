@@ -33,7 +33,7 @@ export class SessionStore {
   create(user: { id: string; username: string; avatar: string | null }, guilds: OAuthGuild[]) {
     const id = randomToken();
     const now = Date.now();
-    this.db.prepare('delete from web_sessions where expires_at < ?').run(now);
+    this.pruneExpired(now);
     this.db
       .prepare(
         `insert into web_sessions (id_hash, user_id, username, avatar, guilds, csrf_token, created_at, expires_at)
@@ -79,5 +79,10 @@ export class SessionStore {
 
   delete(id: string) {
     this.db.prepare('delete from web_sessions where id_hash = ?').run(sha256(id));
+  }
+
+  /** Deletes sessions that expired before `now`; returns how many. */
+  pruneExpired(now = Date.now()): number {
+    return Number(this.db.prepare('delete from web_sessions where expires_at < ?').run(now).changes);
   }
 }

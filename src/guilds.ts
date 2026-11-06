@@ -332,6 +332,11 @@ export class GuildStore {
       .run(guildId, actor.id, actor.name, action, detail, Date.now());
   }
 
+  /** Deletes audit entries written before `before`; returns how many. */
+  pruneAudit(before: number): number {
+    return Number(this.db.prepare('delete from audit_log where created_at < ?').run(before).changes);
+  }
+
   auditLog(guildId: string, limit = 200): AuditEntry[] {
     const rows = this.db
       .prepare('select * from audit_log where guild_id = ? order by id desc limit ?')

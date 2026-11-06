@@ -16,6 +16,7 @@ import {
 } from './discord.ts';
 import { GuildStore } from './guilds.ts';
 import { createMcpHandler } from './mcp.ts';
+import { PRUNE_INTERVAL_MS, pruneOldData } from './retention.ts';
 import { TaskStore } from './store.ts';
 import { devinResolver } from './tenants.ts';
 import { createWebApp } from './web/app.ts';
@@ -83,7 +84,17 @@ try {
   process.exit(1);
 }
 
+let lastPrune = 0;
 while (!stopping) {
+  if (Date.now() - lastPrune >= PRUNE_INTERVAL_MS) {
+    lastPrune = Date.now();
+    try {
+      const pruned = pruneOldData({ tasks, guilds, sessions });
+      if (pruned.tasks || pruned.audit || pruned.sessions) console.log('Pruned old data:', pruned);
+    } catch (error) {
+      console.error('Pruning old data failed:', error);
+    }
+  }
   await sleep(config.pollIntervalMs);
   if (client.isReady()) await bridge.syncAll();
 }

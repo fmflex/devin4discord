@@ -19,15 +19,28 @@ export function authorizeUrl(input: { clientId: string; redirectUri: string; sta
   return `https://discord.com/oauth2/authorize?${params}`;
 }
 
-/** The "Add to Discord" link; preselects `guildId` when given. */
-export function inviteUrl(clientId: string, permissions: bigint, guildId?: string) {
+/**
+ * The "Add to Discord" link. It also asks for the sign-in scopes, which makes Discord
+ * finish with a code grant and send the user back to `redirectUri`, signed in.
+ * Preselects `guildId` when given.
+ */
+export function inviteUrl(input: {
+  clientId: string;
+  permissions: bigint;
+  redirectUri: string;
+  state: string;
+  guildId?: string;
+}) {
   const params = new URLSearchParams({
-    client_id: clientId,
-    scope: 'bot applications.commands',
-    permissions: permissions.toString()
+    client_id: input.clientId,
+    response_type: 'code',
+    redirect_uri: input.redirectUri,
+    scope: `bot applications.commands ${OAUTH_SCOPES}`,
+    permissions: input.permissions.toString(),
+    state: input.state
   });
-  if (guildId) {
-    params.set('guild_id', guildId);
+  if (input.guildId) {
+    params.set('guild_id', input.guildId);
     params.set('disable_guild_select', 'true');
   }
   return `https://discord.com/oauth2/authorize?${params}`;

@@ -154,7 +154,7 @@ const FEATURES: [keyof typeof ICONS, string, Html][] = [
 
 const SETUP_STEPS: [string, Html][] = [
   ['Add the bot', html`to a server where you have Manage Server.`],
-  ['Sign in with Discord', html`here and open the server.`],
+  ['Come back signed in', html`Discord brings you straight to the server's setup.`],
   ['Connect Devin', html`with a service user key and your organization ID.`],
   ['Pick roles and channels', html`then try <code>@Devin say hi</code> in a channel.`]
 ];

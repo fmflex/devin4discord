@@ -97,6 +97,7 @@ ${page.meta
   <div class="top-in">
   <a class="brand" href="/"><img src="/assets/logo.svg" alt="" width="32" height="32"><span>devin<b>4</b>discord</span></a>
   <nav class="me" aria-label="Account">
+    <a class="navlink navdiscord" href="${COMMUNITY_URL}" target="_blank" rel="noopener noreferrer" aria-label="Join our Discord community">${DISCORD_LOGO}<span>Community</span></a>
     <a class="navlink" href="/docs">Docs</a>
     ${session
       ? html`<a class="navlink" href="/">Servers</a>
@@ -204,6 +205,11 @@ export function landingPage(links: { invite: string; publicUrl: string }) {
           <a class="button secondary big" href="/auth/login">Sign in to set up</a>
         </div>
         <p class="muted small">You bring your own Devin organization. <a href="/docs">Read the docs</a></p>
+        <a class="joinbar" href="${COMMUNITY_URL}" target="_blank" rel="noopener noreferrer">
+          <span class="joinlogo">${DISCORD_LOGO}</span>
+          <span><strong>Join our Discord community</strong><span>Get help with setup, share feedback and hear about new features first.</span></span>
+          <span class="joinarrow" aria-hidden="true">→</span>
+        </a>
       </div>
       ${DEMO}
     </section>
@@ -216,7 +222,7 @@ export function landingPage(links: { invite: string; publicUrl: string }) {
       <p class="muted small">You need a Devin organization with API access. <a href="/docs#getting-started">Full setup guide</a></p>
     </section>
     <section class="card community">
-      <div><h2>Join the community</h2><p>Ask questions, get help with setup, share feedback and hear about new features first.</p></div>
+      <div><h2>Join the devin4discord community</h2><p>Ask questions, get help with setup, share feedback and hear about new features first.</p></div>
       <a class="button big" href="${COMMUNITY_URL}" target="_blank" rel="noopener noreferrer">${DISCORD_LOGO}Join our Discord</a>
     </section>`
   });
@@ -714,7 +720,12 @@ main{flex:1;width:100%;max-width:1080px;margin:0 auto;padding:32px 24px}
 .features{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:20px}
 .feature{margin:0;transition:border-color .15s,transform .15s}.feature:hover{border-color:rgba(136,145,255,.35);transform:translateY(-2px)}
 .feature h2{font-size:16px;margin-top:14px}.feature p{margin:0;color:#c3c6cd}
-.community{display:flex;align-items:center;justify-content:space-between;gap:16px 24px;flex-wrap:wrap;margin-top:20px}.community h2{margin:0 0 6px}.community p{margin:0;color:#c3c6cd}.community .button{margin-top:0}
+.community{display:flex;align-items:center;justify-content:space-between;gap:16px 24px;flex-wrap:wrap;margin-top:20px;padding:32px;background:linear-gradient(120deg,rgba(88,101,242,.28),rgba(235,69,158,.14));border-color:rgba(136,145,255,.45)}.community h2{margin:0 0 6px;font-size:24px}.community p{margin:0;color:#d5d8ff;font-size:16px}.community .button{margin-top:0;padding:14px 26px;font-size:17px;box-shadow:0 8px 24px rgba(88,101,242,.45)}
+.joinbar{display:flex;align-items:center;gap:14px;margin-top:20px;padding:14px 18px;border:1px solid rgba(136,145,255,.45);border-radius:12px;background:linear-gradient(120deg,rgba(88,101,242,.22),rgba(88,101,242,.08));color:#fff;text-decoration:none;transition:border-color .15s,background .15s,transform .15s}.joinbar:hover{border-color:#8891ff;background:linear-gradient(120deg,rgba(88,101,242,.34),rgba(88,101,242,.14));transform:translateY(-1px)}
+.joinbar strong{display:block;font-size:16px}.joinbar strong + span{display:block;color:#c3c8ff;font-size:14px}
+.joinlogo{display:inline-flex;flex:none;align-items:center;justify-content:center;width:44px;height:44px;border-radius:12px;background:var(--accent);color:#fff}.joinlogo svg{width:26px;height:26px}
+.joinarrow{margin-left:auto;font-size:20px;color:#c3c8ff}
+.me .button{white-space:nowrap}.navlink.navdiscord{display:inline-flex;align-items:center;gap:6px;color:#c3c8ff}.navlink.navdiscord svg{width:18px;height:18px}
 .ico{display:block;width:40px;height:40px;padding:9px;border-radius:10px;background:rgba(88,101,242,.16);color:var(--accent-2)}
 .flow{list-style:none;counter-reset:step;padding:0;margin:16px 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
 .flow li{counter-increment:step;background:var(--card-2);border:1px solid var(--line);border-radius:10px;padding:16px;color:#c3c6cd}
@@ -804,7 +815,7 @@ form:has(.only-ticked:checked) tbody:not(:has(input[name]:checked)){display:none
 code.token{display:inline-block;margin-top:8px;padding:6px 10px;word-break:break-all;user-select:all;font-size:14px}
 .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:10px}
 @media (max-width:860px){.hero{grid-template-columns:1fr;gap:32px;margin-top:8px}.docs{grid-template-columns:1fr}.toc{position:static;flex-flow:row wrap}}
-@media (max-width:600px){main{padding:20px 14px}.top-in{padding:10px 14px}.card{padding:18px}.username,.me .navlink[href="/"]{display:none}.user{margin:0 2px;padding-left:8px}.thread{margin-left:16px}.row.between{flex-wrap:wrap}}
+@media (max-width:600px){main{padding:20px 14px}.top-in{padding:10px 14px}.card{padding:18px}.username,.me .navlink[href="/"],.navlink.navdiscord span{display:none}.user{margin:0 2px;padding-left:8px}.thread{margin-left:16px}.row.between{flex-wrap:wrap}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
 `;
 

@@ -609,3 +609,50 @@ test('the landing page, docs and images are public', async () => {
   }
   assert.equal((await t.request('/assets/missing.png')).status, 404);
 });
+
+test('channel lists filter by name or category and a filtered save only changes the channels shown', async () => {
+  const t = setup();
+  const { session, csrf } = await signIn(t);
+  t.guilds.setChannels(G, ['400000000000000003'], null);
+  t.guilds.setMcpChannels(G, ['400000000000000003'], ['400000000000000003']);
+
+  for (const path of [`/g/${G}/channels`, `/g/${G}/mcp`]) {
+    const all = await (await t.request(path, { headers: { cookie: session } })).text();
+    assert.match(all, /<form id="channel-search" method="get" action="[^"]+"/);
+    assert.match(all, /name="q" form="channel-search"/);
+    assert.match(all, /class="only-ticked"/);
+    assert.match(all, /<span class="cat">Community<\/span><span class="count">1 ticked<\/span>/);
+    assert.doesNotMatch(all, /name="scoped"/);
+    const found = await (await t.request(`${path}?q=%23BUG`, { headers: { cookie: session } })).text();
+    assert.match(found, /value="400000000000000003"/);
+    assert.doesNotMatch(found, /value="400000000000000001"/);
+    assert.match(found, /1 of 2 channels match/);
+    assert.match(found, /name="scoped" value="1"><input type="hidden" name="shown" value="400000000000000003">/);
+    const byCategory = await (await t.request(`${path}?q=community`, { headers: { cookie: session } })).text();
+    assert.match(byCategory, /value="400000000000000003"/);
+    const none = await (await t.request(`${path}?q=nothing`, { headers: { cookie: session } })).text();
+    assert.match(none, /No channels match &quot;nothing&quot;|No channels match "nothing"/);
+  }
+
+  const channels = await post(t, `/g/${G}/channels`, session, {
+    _csrf: csrf, q: 'general', scoped: '1', shown: '400000000000000001', allowed: '400000000000000001'
+  });
+  assert.equal(channels.status, 302);
+  assert.equal(channels.headers.get('location'), `/g/${G}/channels?saved=1&q=general`);
+  assert.deepEqual(t.guilds.allowedChannels(G).sort(), ['400000000000000001', '400000000000000003']);
+  assert.equal(t.guilds.settings(G)?.taskChannelId ?? null, null);
+
+  const mcp = new URLSearchParams([
+    ['_csrf', csrf], ['q', 'bug'], ['scoped', '1'], ['shown', '400000000000000003'],
+    ['post', '400000000000000001']
+  ]);
+  const saved = await t.request(`/g/${G}/mcp/channels`, {
+    method: 'POST',
+    headers: { cookie: session, origin: PUBLIC, 'content-type': 'application/x-www-form-urlencoded' },
+    body: mcp
+  });
+  assert.equal(saved.status, 302);
+  assert.equal(saved.headers.get('location'), `/g/${G}/mcp?saved=1&q=bug`);
+  assert.deepEqual(t.guilds.mcpReadChannels(G), []);
+  assert.deepEqual(t.guilds.mcpPostChannels(G), []);
+});

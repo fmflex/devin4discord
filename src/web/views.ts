@@ -330,6 +330,58 @@ const KIND_LABEL: Record<ChannelInfo['kind'], string> = {
   forum: 'forum'
 };
 
+export const MAX_CHANNEL_QUERY = 100;
+
+/** Channels whose name or category contains the query (case-insensitive, a leading # ignored). */
+export function matchChannels(channels: ChannelInfo[], query: string) {
+  const q = query.trim().replace(/^#/, '').toLowerCase();
+  if (!q) return channels;
+  return channels.filter(
+    (channel) => channel.name.toLowerCase().includes(q) || (channel.category ?? '').toLowerCase().includes(q)
+  );
+}
+
+function byCategory(channels: ChannelInfo[]) {
+  const groups = new Map<string, ChannelInfo[]>();
+  for (const channel of [...channels].sort((a, b) => a.position - b.position)) {
+    const key = channel.category ?? 'No category';
+    groups.set(key, [...(groups.get(key) ?? []), channel]);
+  }
+  return groups;
+}
+
+/**
+ * Search box, match count and "Show only ticked" toggle for a channel list. The search
+ * inputs belong to a separate GET form (channelSearchForm) so they can sit inside the
+ * settings form; folding and the toggle are pure CSS.
+ */
+function channelTools(action: string, query: string, shown: number, total: number) {
+  return html`<div class="listtools">
+    <input type="search" name="q" form="channel-search" value="${query}" maxlength="${MAX_CHANNEL_QUERY}" placeholder="Search channels or categories" aria-label="Search channels">
+    <button class="button secondary" form="channel-search">Search</button>
+    ${query ? html`<a href="${action}">Clear</a> <span class="muted small">${shown} of ${total} channels match</span>` : ''}
+    <label class="check"><input type="checkbox" class="only-ticked"> Show only ticked</label>
+  </div>
+  <p class="muted small none-ticked">Nothing is ticked${query ? ' among the channels shown' : ''}.</p>`;
+}
+
+function channelSearchForm(action: string) {
+  return html`<form id="channel-search" method="get" action="${action}" role="search"></form>`;
+}
+
+/** With a search, saving only changes the channels shown; the rest keep their settings. */
+function listScope(query: string, shown: ChannelInfo[]) {
+  return query
+    ? html`<input type="hidden" name="q" value="${query}"><input type="hidden" name="scoped" value="1">${shown.map(
+        (channel) => html`<input type="hidden" name="shown" value="${channel.id}">`
+      )}`
+    : '';
+}
+
+function categoryRow(category: string, columns: number, ticked: number) {
+  return html`<tr class="group"><td colspan="${columns}"><label class="fold"><input type="checkbox" aria-label="Fold ${category}"><span class="cat">${category}</span>${ticked ? html`<span class="count">${ticked} ticked</span>` : ''}</label></td></tr>`;
+}
+
 export function channelsPage(
   session: WebSession,
   guild: { id: string; name: string },
@@ -338,26 +390,29 @@ export function channelsPage(
   taskChannelId: string | null,
   mention: MentionSettings,
   notice: PageOptions['notice'],
-  editable: Set<string> | null
+  editable: Set<string> | null,
+  query = ''
 ) {
   const allowedSet = new Set(allowed);
   const locked = (channel: ChannelInfo) => (editable && !editable.has(channel.id) ? ' disabled' : '');
-  const anyLocked = channels.some((channel) => locked(channel));
-  const groups = new Map<string, ChannelInfo[]>();
-  for (const channel of [...channels].sort((a, b) => a.position - b.position)) {
-    const key = channel.category ?? 'No category';
-    groups.set(key, [...(groups.get(key) ?? []), channel]);
-  }
+  const shown = matchChannels(channels, query);
+  const anyLocked = shown.some((channel) => locked(channel));
+  const groups = byCategory(shown);
+  const action = `/g/${guild.id}/channels`;
+  const ticked = (list: ChannelInfo[]) =>
+    list.filter((channel) => allowedSet.has(channel.id) || taskChannelId === channel.id).length;
   return layout({
     title: `${guild.name} · Channels`,
     session,
     guild: { ...guild, tab: 'channels' },
     notice,
-    body: html`<form class="card wide" method="post" action="/g/${guild.id}/channels">
+    body: html`${channelSearchForm(action)}<form class="card wide" method="post" action="${action}">
       ${csrfField(session)}
+      ${listScope(query, shown)}
       <h2>Channels</h2>
       <p class="muted"><strong>Allowed</strong>: where @Devin, the robot reaction, "Send to Devin" and <code>/devin start</code> work. None ticked means every channel.
         <strong>Task channel</strong>: where task threads open; by default the thread opens in the channel the request came from.</p>
+      ${channelTools(action, query, shown.length, channels.length)}
       <table class="grid">
         <thead><tr><th>Channel</th>
           <th>Allowed ${help('allowed channels', html`<p>Where tasks can be started. Threads inside an allowed channel count too.</p><p>With none ticked, every channel the bot can see is allowed.</p>`)}</th>
@@ -365,18 +420,19 @@ export function channelsPage(
         <tbody>
           <tr><td class="muted">Channel the request came from</td><td></td>
             <td class="center"><input type="radio" name="task_channel" value="" aria-label="Source channel" ${taskChannelId ? '' : 'checked'}></td></tr>
+        </tbody>
           ${[...groups].map(
-            ([category, list]) => html`<tr class="group"><td colspan="3">${category}</td></tr>
+            ([category, list]) => html`<tbody>${categoryRow(category, 3, ticked(list))}
               ${list.map(
                 (channel) => html`<tr>
                   <td>${channel.kind === 'text' ? html`<span class="muted">#</span> ` : ''}${channel.name}${channel.kind === 'text' ? '' : html` <span class="muted small">${KIND_LABEL[channel.kind]}</span>`}${locked(channel) ? html` <span class="muted small">hidden from you</span>` : ''}</td>
                   <td class="center"><input type="checkbox" name="allowed" value="${channel.id}" aria-label="Allow ${channel.name}" ${allowedSet.has(channel.id) ? 'checked' : ''}${locked(channel)}></td>
                   <td class="center"><input type="radio" name="task_channel" value="${channel.id}" aria-label="Task channel ${channel.name}" ${taskChannelId === channel.id ? 'checked' : ''}${locked(channel)}></td>
                 </tr>`
-              )}`
+              )}</tbody>`
           )}
-        </tbody>
       </table>
+      ${query && !shown.length ? html`<p class="muted small">No channels match "${query}".</p>` : ''}
       ${anyLocked ? html`<p class="muted small">Channels marked "hidden from you" are ones Discord doesn't let you view, so only Discord Administrators can change them here.</p>` : ''}
       <h3>Mentions and replies</h3>
       <label>Channel messages sent as context with an @Devin mention ${help('context messages', html`<p>How many earlier messages from the channel (0–${MAX_CONTEXT_MESSAGES}) are sent with an @Devin mention, so Devin knows what's being discussed.</p><p>They're marked as untrusted, so Devin uses them as background and never follows instructions in them. 0 sends none.</p>`)}
@@ -408,17 +464,18 @@ export function mcpPage(
   token: { hint: string; createdAt: number } | null,
   newToken: string | null,
   notice: PageOptions['notice'],
-  canEdit: boolean
+  canEdit: boolean,
+  query = ''
 ) {
   const created = token ? new Date(token.createdAt).toISOString().slice(0, 10) : '';
   const readSet = new Set(settings.read);
   const postSet = new Set(settings.post);
   const allowedSet = new Set(settings.allowed);
-  const groups = new Map<string, ChannelInfo[]>();
-  for (const channel of [...settings.channels].sort((a, b) => a.position - b.position)) {
-    const key = channel.category ?? 'No category';
-    groups.set(key, [...(groups.get(key) ?? []), channel]);
-  }
+  const shown = matchChannels(settings.channels, query);
+  const groups = byCategory(shown);
+  const action = `/g/${guild.id}/mcp`;
+  const ticked = (list: ChannelInfo[]) =>
+    list.filter((channel) => readSet.has(channel.id) || postSet.has(channel.id)).length;
   const inheritedChannels = settings.channels
     .filter((channel) => allowedSet.has(channel.id))
     .map((channel) => `#${channel.name}`);
@@ -458,27 +515,28 @@ export function mcpPage(
       <ul class="steps">${MCP_TOOLS.map(([name, text]) => html`<li><code>${name}</code>: ${text}</li>`)}</ul>
       <p class="muted small">The task-thread tools take a task key that only that task's Devin session gets in its prompt, so a session can only use its own thread. Tasks started before the token was generated have no key. Stopped tasks can't post.</p>
       <h3>Channels</h3>
+      ${channelSearchForm(action)}
       <form method="post" action="/g/${guild.id}/mcp/channels">
         ${csrfField(session)}
-        ${editable(canEdit, html`<table class="grid">
+        ${channelTools(action, query, shown.length, settings.channels.length)}
+        ${editable(canEdit, html`${listScope(query, shown)}<table class="grid">
           <thead><tr>
             <th>Channel</th>
             <th>Read ${help('MCP read channels', html`<p>Channels Devin may read through MCP (<code>list_channels</code>, <code>read_channel</code>, <code>get_message</code>), and the public threads inside them. Private threads are never readable. Devin reads its own task thread with <code>read_task_thread</code>, using a key only that task's session gets; it can't open other task threads unless their channel is ticked.</p><p>With none ticked, it follows the Allowed list on the Channels tab. When that's empty too, it can only read channels <strong>@everyone</strong> can see.</p><p>The bot's own Discord permissions come first: where its role can't see the channel (or send messages, for Post), nothing gets through, ticked or not.</p><p>${doc('https://support.discord.com/hc/en-us/articles/206141927-How-is-the-permission-hierarchy-structured', 'Discord permission hierarchy')}</p>`)}</th>
             <th>Post ${help('MCP posting channels', html`<p><code>post_to_channel</code> only posts in the ticked channels and threads under them. In a ticked forum it starts new posts and replies in existing ones.</p><p>Nobody is pinged. With none ticked, Devin can only post in its own task threads.</p><p>Anyone with the token can post there, so only tick channels where that's OK.</p><p>The bot's own Discord permissions come first: where its role can't see the channel (or send messages, for Post), nothing gets through, ticked or not.</p><p>${doc('https://support.discord.com/hc/en-us/articles/206141927-How-is-the-permission-hierarchy-structured', 'Discord permission hierarchy')}</p>`, true)}</th>
           </tr></thead>
-          <tbody>
             ${[...groups].map(
-              ([category, list]) => html`<tr class="group"><td colspan="3">${category}</td></tr>
+              ([category, list]) => html`<tbody>${categoryRow(category, 3, ticked(list))}
                 ${list.map(
                   (channel) => html`<tr class="${channel.bot?.read === false || channel.bot?.post === false ? 'noaccess' : ''}">
                     <td>${channel.kind === 'text' ? html`<span class="muted">#</span> ` : ''}${channel.name}${channel.kind === 'text' ? '' : html` <span class="muted small">${KIND_LABEL[channel.kind]}</span>`}</td>
                     <td class="center"><input type="checkbox" name="read" value="${channel.id}" aria-label="Allow MCP reading in ${channel.name}" ${readSet.has(channel.id) ? 'checked' : ''}>${channel.bot?.read === false ? html`<br><span class="muted small">bot can't read here</span>` : ''}</td>
                     <td class="center"><input type="checkbox" name="post" value="${channel.id}" aria-label="Allow MCP posting in ${channel.name}" ${postSet.has(channel.id) ? 'checked' : ''}>${channel.bot?.post === false ? html`<br><span class="muted small">bot can't post here</span>` : ''}</td>
                   </tr>`
-                )}`
+                )}</tbody>`
             )}
-          </tbody>
         </table>
+        ${query && !shown.length ? html`<p class="muted small">No channels match "${query}".</p>` : ''}
         <p class="muted small">${readSummary}</p>
         ${hasBotPermissionLimits
           ? html`<p class="muted small">Channels marked "bot can't…" need the bot's role to get View Channel and Read Message History (Read) or Send Messages (Post) in Discord.</p>`
@@ -584,6 +642,19 @@ table.grid{width:100%;border-collapse:collapse;margin-top:8px}.grid th,.grid td{
 .grid th{font-size:12px;text-transform:uppercase;color:var(--muted);font-weight:600}.grid .center{text-align:center}
 .grid tr.group td{font-size:12px;text-transform:uppercase;color:var(--muted);padding-top:16px}
 tr.noaccess td:first-child { opacity: .55 }
+.listtools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0 0}
+.listtools input[type=search]{flex:1 1 220px;width:auto;margin:0}.listtools .button{margin-top:0}
+.listtools label.check{margin:0;font-weight:400;white-space:nowrap}
+label.fold{display:inline-flex;gap:8px;align-items:center;margin:0;cursor:pointer;font-weight:600;user-select:none}
+label.fold input{position:absolute;opacity:0;width:1px;height:1px}
+label.fold .cat::before{content:"▾";display:inline-block;width:14px}
+tbody:has(label.fold input:checked) label.fold .cat::before{content:"▸"}
+label.fold:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
+label.fold .count{text-transform:none;font-weight:400}
+tbody:has(label.fold input:checked) tr:not(.group){display:none}
+form:has(.only-ticked:checked) tbody tr:not(.group):not(:has(input[name]:checked)){display:none}
+form:has(.only-ticked:checked) tbody:not(:has(input[name]:checked)){display:none}
+.none-ticked{display:none}form:has(.only-ticked:checked):not(:has(tbody input[name]:checked)) .none-ticked{display:block}
 .help{display:inline-block;position:relative;margin-left:4px;vertical-align:middle;font-size:13px;font-weight:400;text-transform:none;letter-spacing:normal}
 .help summary{list-style:none;cursor:pointer;width:17px;height:17px;border-radius:50%;background:#4e5058;color:#fff;font-size:11px;font-weight:700;line-height:17px;text-align:center;user-select:none}
 .help summary::-webkit-details-marker{display:none}.help summary:hover,.help[open] summary{background:var(--accent)}

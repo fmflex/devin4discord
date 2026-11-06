@@ -60,7 +60,8 @@ function setup() {
     channels: async () => [
       { id: GENERAL, name: 'general', kind: 'text', category: null, position: 0, public: true },
       { id: SECRET_CH, name: 'staff', kind: 'text', category: null, position: 1, public: false, bot: { read: false, post: false } }
-    ]
+    ],
+    visibleChannels: async () => []
   };
   guilds.ensure(G, 'Test');
   guilds.setChannels(G, [GENERAL], null);

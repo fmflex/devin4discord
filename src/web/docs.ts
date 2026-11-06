@@ -12,7 +12,7 @@ const SECTIONS: Section[] = [
   {
     id: 'getting-started',
     title: 'Getting started',
-    body: html`<p>You need two things: <strong>Manage Server</strong> (or Administrator) in the Discord server, and a Devin organization with API access.</p>
+    body: html`<p>You need two things: <strong>Administrator</strong> in the Discord server, and a Devin organization with API access.</p>
       <ol class="steps">
         <li><strong>Create a service user in Devin.</strong> Go to <strong>Settings → Devin API → Service users</strong>, create one and copy its key (it starts with <code>cog_</code> and is only shown once). Give its role:
           <ul>
@@ -94,7 +94,8 @@ const SECTIONS: Section[] = [
         </tbody>
       </table>
       <p>Each role can also have limits: <strong>ACUs per task</strong>, <strong>tasks per day</strong> per member and <strong>tasks running at once</strong> per member. Empty means no limit. Sleeping tasks count as running; stopped and finished ones don't. A member with several roles gets the most generous value of each.</p>
-      <p>Members with Discord's <strong>Administrator</strong> permission have their own row. They can do everything with no limits until you change that row. They, and members with <strong>Manage Server</strong>, can always change settings, so nobody gets locked out.</p>`
+      <p>Members with Discord's <strong>Administrator</strong> permission have their own row. They can do everything with no limits until you change that row. They, and members with <strong>Manage Server</strong>, can always change settings, so nobody gets locked out.</p>
+      <p>Only Discord Administrators can change the Devin connection, role permissions and MCP settings. Other members with Change settings can view them, and on the Channels page they can only change channels Discord lets them view.</p>`
   },
   {
     id: 'channels',

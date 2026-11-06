@@ -30,4 +30,6 @@ export interface Directory {
   member(guildId: string, userId: string): Promise<MemberSnapshot | null>;
   roles(guildId: string): Promise<RoleInfo[]>;
   channels(guildId: string): Promise<ChannelInfo[]>;
+  /** IDs of the channels this member can view and read history in. */
+  visibleChannels(guildId: string, userId: string): Promise<string[]>;
 }

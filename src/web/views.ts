@@ -44,6 +44,13 @@ export function doc(href: string, text: string) {
 }
 
 /** A "?" that opens an explanation on click; `end` anchors it to the right for columns near the edge. */
+const ADMIN_ONLY_NOTE = html`<p class="muted small">Only Discord Administrators can change these settings.</p>`;
+
+/** Wraps form controls so they're read-only for members who may only view them. */
+function editable(canEdit: boolean, body: Html | Html[]) {
+  return html`<fieldset${canEdit ? '' : ' disabled'}>${body}</fieldset>`;
+}
+
 function help(topic: string, body: Html, end = false) {
   return html`<details class="help${end ? ' end' : ''}"><summary aria-label="About ${topic}" title="About ${topic}">?</summary><div class="tip">${body}</div></details>`;
 }
@@ -205,7 +212,7 @@ export function devinPage(
   guild: { id: string; name: string },
   form: DevinForm,
   notice: PageOptions['notice'],
-  canEditUserMap: boolean
+  canEdit: boolean
 ) {
   return layout({
     title: `${guild.name} · Devin`,
@@ -216,6 +223,8 @@ export function devinPage(
       ${csrfField(session)}
       <h2>Devin connection</h2>
       <p class="muted">Use a service user key (Devin → Settings → Devin API → Service users) with permission to create, view and message sessions. Tasks are created by this service user.</p>
+      ${canEdit ? '' : ADMIN_ONLY_NOTE}
+      ${editable(canEdit, html`
       <label>API key ${help('the API key', html`<p>A Devin <strong>service user</strong> key, starting with <code>cog_</code>. In Devin, open <strong>Settings → Devin API → Service users</strong>, create one and copy the key. Devin shows it only once.</p>
         <p>Give its role <code>UseDevinSessions</code>, <code>ViewOrgSessions</code> and <code>ManageOrgSessions</code>, plus <code>ImpersonateOrgSessions</code> and <code>ViewOrgMembership</code> if you use "Run as Devin users".</p>
         <p>It's checked with read-only calls before saving and stored encrypted.</p>
@@ -240,16 +249,15 @@ export function devinPage(
         <p>Only Discord Administrators can change this list. Each Devin user is checked to be in the organization before saving, and every change is written to the audit log.</p>
         <p>Needs <code>ImpersonateOrgSessions</code> and <code>ViewOrgMembership</code> on the service user. The Devin user must be in the organization and allowed to use Devin.</p>
         <p>${doc(DOCS.discordIds, 'Discord: finding IDs')} · ${doc(DOCS.createSession, 'Devin docs: create_as_user_id')}</p>`)}
-        <textarea name="user_map" rows="3" spellcheck="false"${canEditUserMap ? '' : ' readonly'}>${form.userMap}</textarea>
+        <textarea name="user_map" rows="3" spellcheck="false">${form.userMap}</textarea>
       </label>
-      ${canEditUserMap ? '' : html`<p class="muted small">Only Discord Administrators can change who runs as which Devin user.</p>`}
       <label>Extra instructions <span class="muted">(added to every task; a default is used when empty)</span> ${help('extra instructions', html`<p>Added to the prompt of every task from this server, for example your conventions or "open PRs as drafts".</p>
         <p>When empty, this default is used: <em>${DEFAULT_INSTRUCTIONS}</em></p>`)}
         <textarea name="instructions" rows="3">${form.instructions}</textarea>
       </label>
-      <button class="button">Check and save</button>
+      <button class="button">Check and save</button>`)}
     </form>
-    ${form.keyHint
+    ${form.keyHint && canEdit
       ? html`<form class="card danger" method="post" action="/g/${guild.id}/devin/remove">
           ${csrfField(session)}
           <h2>Disconnect</h2>
@@ -264,7 +272,7 @@ const PERMISSION_HELP: Record<(typeof PERMISSIONS)[number], Html> = {
   start_tasks: html`<p>Start a task with <strong>@Devin</strong>, the robot reaction, <strong>Send to Devin</strong> or <code>/devin start</code>, and reply in their own task threads.</p><p>Only works in the allowed channels (see Channels).</p>`,
   reply: html`<p>Messages they post in any task thread are forwarded to Devin.</p><p>Messages starting with <code>//</code> are never forwarded.</p>`,
   manage_tasks: html`<p>Stop or put to sleep any task: the Stop / Sleep buttons, <code>@Devin stop</code> / <code>@Devin sleep</code> or <code>/devin stop</code> / <code>/devin sleep</code>. Also lets them reply to any task.</p><p>The member who started a task can always stop or sleep it.</p>`,
-  settings: html`<p>Use this setup site for the server. Members with Administrator or Manage Server always can.</p>`
+  settings: html`<p>Use this setup site for the server. Members with Administrator or Manage Server always can.</p><p>Only Discord Administrators can change the Devin connection, these permissions and the MCP settings. Others can view them and change channels they can see themselves.</p>`
 };
 
 function roleColor(role: RoleInfo) {
@@ -276,7 +284,8 @@ export function permissionsPage(
   guild: { id: string; name: string },
   roles: RoleInfo[],
   rules: RoleRule[],
-  notice: PageOptions['notice']
+  notice: PageOptions['notice'],
+  canEdit: boolean
 ) {
   const byRole = new Map(rules.map((rule) => [rule.roleId, rule]));
   const limit = (value: number | null | undefined) => (value == null ? '' : String(value));
@@ -299,7 +308,8 @@ export function permissionsPage(
       ${csrfField(session)}
       <h2>Role permissions</h2>
       <p class="muted">The Administrator row is for members with Discord's Administrator permission. They always keep Change settings, and so does Manage Server. Limits apply to roles that can start tasks; empty means no limit, and a member with several roles (Administrator counts as one) gets the most generous one.</p>
-      <div class="scroll"><table class="grid">
+      ${canEdit ? '' : ADMIN_ONLY_NOTE}
+      ${editable(canEdit, html`<div class="scroll"><table class="grid">
         <thead><tr><th>Role ${help('roles', html`<p>Roles are read live from Discord. A member gets every permission any of their roles grants.</p><p>For limits, the most generous of their roles that can start tasks applies.</p>`)}</th>${PERMISSIONS.map((p) => html`<th>${PERMISSION_LABELS[p]} ${help(PERMISSION_LABELS[p], PERMISSION_HELP[p])}</th>`)}
           <th>ACU cap / task ${help('the ACU cap', html`<p>The most ACUs (Agent Compute Units, how Devin usage is measured) one task may use. It's sent as the session's <code>max_acu_limit</code>.</p><p>Empty means no cap.</p><p>${doc(DOCS.billing, 'Devin docs: billing and ACUs')} · ${doc(DOCS.createSession, 'create session')}</p>`, true)}</th>
           <th>Tasks / day ${help('tasks per day', html`<p>How many tasks one member may start in any 24 hours.</p><p>Empty means no limit; 0 blocks starting.</p>`, true)}</th>
@@ -309,7 +319,7 @@ export function permissionsPage(
           ${roles.map((role) => row(role.id, role.name, roleColor(role), byRole.get(role.id)))}
         </tbody>
       </table></div>
-      <button class="button">Save permissions</button>
+      <button class="button">Save permissions</button>`)}
     </form>`
   });
 }
@@ -327,9 +337,12 @@ export function channelsPage(
   allowed: string[],
   taskChannelId: string | null,
   mention: MentionSettings,
-  notice: PageOptions['notice']
+  notice: PageOptions['notice'],
+  editable: Set<string> | null
 ) {
   const allowedSet = new Set(allowed);
+  const locked = (channel: ChannelInfo) => (editable && !editable.has(channel.id) ? ' disabled' : '');
+  const anyLocked = channels.some((channel) => locked(channel));
   const groups = new Map<string, ChannelInfo[]>();
   for (const channel of [...channels].sort((a, b) => a.position - b.position)) {
     const key = channel.category ?? 'No category';
@@ -356,14 +369,15 @@ export function channelsPage(
             ([category, list]) => html`<tr class="group"><td colspan="3">${category}</td></tr>
               ${list.map(
                 (channel) => html`<tr>
-                  <td>${channel.kind === 'text' ? html`<span class="muted">#</span> ` : ''}${channel.name}${channel.kind === 'text' ? '' : html` <span class="muted small">${KIND_LABEL[channel.kind]}</span>`}</td>
-                  <td class="center"><input type="checkbox" name="allowed" value="${channel.id}" aria-label="Allow ${channel.name}" ${allowedSet.has(channel.id) ? 'checked' : ''}></td>
-                  <td class="center"><input type="radio" name="task_channel" value="${channel.id}" aria-label="Task channel ${channel.name}" ${taskChannelId === channel.id ? 'checked' : ''}></td>
+                  <td>${channel.kind === 'text' ? html`<span class="muted">#</span> ` : ''}${channel.name}${channel.kind === 'text' ? '' : html` <span class="muted small">${KIND_LABEL[channel.kind]}</span>`}${locked(channel) ? html` <span class="muted small">hidden from you</span>` : ''}</td>
+                  <td class="center"><input type="checkbox" name="allowed" value="${channel.id}" aria-label="Allow ${channel.name}" ${allowedSet.has(channel.id) ? 'checked' : ''}${locked(channel)}></td>
+                  <td class="center"><input type="radio" name="task_channel" value="${channel.id}" aria-label="Task channel ${channel.name}" ${taskChannelId === channel.id ? 'checked' : ''}${locked(channel)}></td>
                 </tr>`
               )}`
           )}
         </tbody>
       </table>
+      ${anyLocked ? html`<p class="muted small">Channels marked "hidden from you" are ones Discord doesn't let you view, so only Discord Administrators can change them here.</p>` : ''}
       <h3>Mentions and replies</h3>
       <label>Channel messages sent as context with an @Devin mention ${help('context messages', html`<p>How many earlier messages from the channel (0–${MAX_CONTEXT_MESSAGES}) are sent with an @Devin mention, so Devin knows what's being discussed.</p><p>They're marked as untrusted, so Devin uses them as background and never follows instructions in them. 0 sends none.</p>`)}
         <input class="narrow" type="number" name="context_messages" min="0" max="${MAX_CONTEXT_MESSAGES}" value="${mention.contextMessages}">
@@ -393,7 +407,8 @@ export function mcpPage(
   settings: { channels: ChannelInfo[]; read: string[]; post: string[]; allowed: string[] },
   token: { hint: string; createdAt: number } | null,
   newToken: string | null,
-  notice: PageOptions['notice']
+  notice: PageOptions['notice'],
+  canEdit: boolean
 ) {
   const created = token ? new Date(token.createdAt).toISOString().slice(0, 10) : '';
   const readSet = new Set(settings.read);
@@ -429,7 +444,8 @@ export function mcpPage(
       </label>
       <label>Token ${help('the token', html`<p>A bearer token that identifies this server. Anyone with it can read the selected MCP channels (or the Channels tab's Allowed list when none are ticked, and channels @everyone can see when that's empty too) and post in selected MCP channels, so keep it in Devin only.</p><p>Task threads need more than the token: each task's session gets its own task key in its prompt.</p><p>Generating a new one stops the old one at once.</p>`)}</label>
       <p class="muted small">${token ? html`Token is <strong>set, ends in …${token.hint}</strong>, created ${created}.` : 'No token yet. Generate one to turn the MCP server on.'}</p>
-      <form method="post" action="/g/${guild.id}/mcp/token">${csrfField(session)}<button class="button">${token ? 'Generate a new token' : 'Generate token'}</button></form>
+      ${canEdit ? '' : ADMIN_ONLY_NOTE}
+      <form method="post" action="/g/${guild.id}/mcp/token">${csrfField(session)}${editable(canEdit, html`<button class="button">${token ? 'Generate a new token' : 'Generate token'}</button>`)}</form>
       <h3>Add it to Devin</h3>
       <ol class="steps">
         <li>In Devin, open <strong>Customize → MCPs</strong>, then <strong>Add MCP → Add custom MCP</strong>. It needs the Manage MCP Servers permission.</li>
@@ -444,7 +460,7 @@ export function mcpPage(
       <h3>Channels</h3>
       <form method="post" action="/g/${guild.id}/mcp/channels">
         ${csrfField(session)}
-        <table class="grid">
+        ${editable(canEdit, html`<table class="grid">
           <thead><tr>
             <th>Channel</th>
             <th>Read ${help('MCP read channels', html`<p>Channels Devin may read through MCP (<code>list_channels</code>, <code>read_channel</code>, <code>get_message</code>), and the public threads inside them. Private threads are never readable. Devin reads its own task thread with <code>read_task_thread</code>, using a key only that task's session gets; it can't open other task threads unless their channel is ticked.</p><p>With none ticked, it follows the Allowed list on the Channels tab. When that's empty too, it can only read channels <strong>@everyone</strong> can see.</p><p>The bot's own Discord permissions come first: where its role can't see the channel (or send messages, for Post), nothing gets through, ticked or not.</p><p>${doc('https://support.discord.com/hc/en-us/articles/206141927-How-is-the-permission-hierarchy-structured', 'Discord permission hierarchy')}</p>`)}</th>
@@ -469,10 +485,10 @@ export function mcpPage(
         ${hasBotPermissionLimits
           ? html`<p class="muted small">Channels marked "bot can't…" need the bot's role to get View Channel and Read Message History (Read) or Send Messages (Post) in Discord.</p>`
           : ''}
-        <button class="button">Save channels</button>
+        <button class="button">Save channels</button>`)}
       </form>
     </section>
-    ${token
+    ${token && canEdit
       ? html`<form class="card danger" method="post" action="/g/${guild.id}/mcp/remove">
           ${csrfField(session)}
           <h2>Turn off</h2>
@@ -546,6 +562,7 @@ main{max-width:1000px;margin:0 auto;padding:24px}
 h1{font-size:22px;margin:0 0 12px}h2{font-size:18px;margin:0 0 8px}
 .muted{color:var(--muted)}.small{font-size:13px}.nowrap{white-space:nowrap}
 label{display:block;margin:14px 0 4px;font-weight:600}
+fieldset{border:0;margin:0;padding:0;min-width:0}fieldset:disabled .button{opacity:.5;cursor:not-allowed}
 label.check{display:flex;gap:8px;align-items:center}
 label.check input{width:auto;margin:0}
 input.narrow{max-width:120px;display:block}

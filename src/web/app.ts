@@ -359,6 +359,13 @@ export function createWebApp(deps: WebDeps) {
   app.use('/g/:guildId', guard);
   app.use('/g/:guildId/*', guard);
 
+  // Delegated `settings` holders may only change channels they can see. Anything that grants rights,
+  // moves the Devin account or exposes channels through MCP is for Discord Administrators.
+  const adminOnly: MiddlewareHandler<Env> = async (c, next) => {
+    if (c.get('member').isAdmin) return next();
+    return c.html(errorPage(c.get('session'), 'Not allowed', 'Only Discord Administrators can change this.'), 403);
+  };
+
   const ctx = (c: Context<Env>) => ({
     session: c.get('session') as WebSession,
     guild: { id: c.get('guildId'), name: c.get('guildName') },
@@ -382,11 +389,10 @@ export function createWebApp(deps: WebDeps) {
 
   app.get('/g/:guildId/devin', (c) => {
     const { session, guild } = ctx(c);
-    const canEditUserMap = c.get('member').isAdmin;
-    return c.html(devinPage(session, guild, devinForm(guild.id), noticeFrom(c), canEditUserMap));
+    return c.html(devinPage(session, guild, devinForm(guild.id), noticeFrom(c), c.get('member').isAdmin));
   });
 
-  app.post('/g/:guildId/devin', async (c) => {
+  app.post('/g/:guildId/devin', adminOnly, async (c) => {
     const { session, guild, actor } = ctx(c);
     const form = (await c.req.parseBody({ all: true })) as Form;
     const existing = deps.guilds.devin(guild.id);
@@ -399,19 +405,13 @@ export function createWebApp(deps: WebDeps) {
       userMap: field(form, 'user_map'),
       instructions: field(form, 'instructions')
     };
-    // Mappings decide which Devin user tasks run as, so only Discord Administrators may edit them.
-    const canEditUserMap = c.get('member').isAdmin;
-    const fail = (text: string) =>
-      c.html(devinPage(session, guild, submitted, { kind: 'error', text }, canEditUserMap), 400);
+    const fail = (text: string) => c.html(devinPage(session, guild, submitted, { kind: 'error', text }, true), 400);
     try {
       if (!/^[\w-]{3,100}$/.test(orgId)) return fail('Enter the organization ID, like org-abc123.');
       if (!newKey && !existing) return fail('Enter the Devin API key.');
       const repos = parseRepos(submitted.repos);
       const userMap = parseUserMap(submitted.userMap);
       const mapChanges = userMapChanges(existing?.userMap ?? {}, userMap);
-      if (mapChanges.length && !canEditUserMap) {
-        return fail('Only Discord Administrators can change "Run as Devin users".');
-      }
       const apiKey = newKey || deps.secrets.decrypt(existing!.apiKeyEncrypted, guild.id);
       const credentialsChanged = Boolean(newKey) || orgId !== existing?.orgId;
       const changes: string[] = [];
@@ -447,7 +447,7 @@ export function createWebApp(deps: WebDeps) {
     return c.redirect(`/g/${guild.id}/devin?saved=1`);
   });
 
-  app.post('/g/:guildId/devin/remove', (c) => {
+  app.post('/g/:guildId/devin/remove', adminOnly, (c) => {
     const { guild, actor } = ctx(c);
     if (deps.guilds.devin(guild.id)) {
       deps.guilds.clearDevin(guild.id);
@@ -464,10 +464,10 @@ export function createWebApp(deps: WebDeps) {
   app.get('/g/:guildId/permissions', async (c) => {
     const { session, guild } = ctx(c);
     const roles = await assignableRoles(guild.id);
-    return c.html(permissionsPage(session, guild, roles, deps.guilds.roleRules(guild.id), noticeFrom(c)));
+    return c.html(permissionsPage(session, guild, roles, deps.guilds.roleRules(guild.id), noticeFrom(c), c.get('member').isAdmin));
   });
 
-  app.post('/g/:guildId/permissions', async (c) => {
+  app.post('/g/:guildId/permissions', adminOnly, async (c) => {
     const { session, guild, actor } = ctx(c);
     const form = (await c.req.parseBody({ all: true })) as Form;
     const roles = await assignableRoles(guild.id);
@@ -495,7 +495,7 @@ export function createWebApp(deps: WebDeps) {
       }
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error);
-      return c.html(permissionsPage(session, guild, roles, [...before.values()], { kind: 'error', text }), 400);
+      return c.html(permissionsPage(session, guild, roles, [...before.values()], { kind: 'error', text }, true), 400);
     }
     const changed = rules
       .map((rule) => {
@@ -514,9 +514,17 @@ export function createWebApp(deps: WebDeps) {
     return c.redirect(`/g/${guild.id}/permissions?saved=1`);
   });
 
+  /** Channel IDs this member may change on the Channels tab; null means all of them. */
+  async function editableChannels(c: Context<Env>): Promise<Set<string> | null> {
+    const member = c.get('member');
+    if (member.isAdmin) return null;
+    return new Set(await deps.directory.visibleChannels(c.get('guildId'), member.id));
+  }
+
   app.get('/g/:guildId/channels', async (c) => {
     const { session, guild } = ctx(c);
     const channels = await deps.directory.channels(guild.id);
+    const editable = await editableChannels(c);
     return c.html(
       channelsPage(
         session,
@@ -525,7 +533,8 @@ export function createWebApp(deps: WebDeps) {
         deps.guilds.allowedChannels(guild.id),
         deps.guilds.settings(guild.id)?.taskChannelId ?? null,
         mentionSettings(deps.guilds, guild.id),
-        noticeFrom(c)
+        noticeFrom(c),
+        editable
       )
     );
   });
@@ -535,15 +544,31 @@ export function createWebApp(deps: WebDeps) {
     const form = (await c.req.parseBody({ all: true })) as Form;
     const channels = await deps.directory.channels(guild.id);
     const names = new Map(channels.map((channel) => [channel.id, channel.name]));
-    const allowed = fields(form, 'allowed').filter((id) => names.has(id));
+    // Members who aren't Administrators can't add or remove channels Discord hides from them,
+    // since the Allowed list is also the MCP read list's fallback.
+    const editable = await editableChannels(c);
+    const canEdit = (id: string) => !editable || editable.has(id);
+    const before = deps.guilds.allowedChannels(guild.id);
+    const submitted = fields(form, 'allowed').filter((id) => names.has(id));
+    const ignored = new Set(submitted.filter((id) => !canEdit(id) && !before.includes(id)));
+    const allowed = [
+      ...new Set([...submitted.filter(canEdit), ...before.filter((id) => names.has(id) && !canEdit(id))])
+    ];
+    const currentTaskChannel = deps.guilds.settings(guild.id)?.taskChannelId ?? null;
     const taskChannel = field(form, 'task_channel');
-    const taskChannelId = names.has(taskChannel) ? taskChannel : null;
+    let taskChannelId = names.has(taskChannel) ? taskChannel : null;
+    // A disabled radio isn't submitted, so a missing field keeps the current task channel.
+    if (!fields(form, 'task_channel').length) taskChannelId = currentTaskChannel;
+    if (taskChannelId && taskChannelId !== currentTaskChannel && !canEdit(taskChannelId)) {
+      ignored.add(taskChannelId);
+      taskChannelId = currentTaskChannel;
+    }
     const contextRaw = field(form, 'context_messages');
     const contextMessages = contextRaw === '' ? DEFAULT_CONTEXT_MESSAGES : Number(contextRaw);
     if (!Number.isInteger(contextMessages) || contextMessages < 0 || contextMessages > MAX_CONTEXT_MESSAGES) {
       const text = `Context messages must be a whole number from 0 to ${MAX_CONTEXT_MESSAGES}.`;
       return c.html(
-        channelsPage(ctx(c).session, guild, channels, allowed, taskChannelId, mentionSettings(deps.guilds, guild.id), { kind: 'error', text }),
+        channelsPage(ctx(c).session, guild, channels, allowed, taskChannelId, mentionSettings(deps.guilds, guild.id), { kind: 'error', text }, editable),
         400
       );
     }
@@ -555,7 +580,8 @@ export function createWebApp(deps: WebDeps) {
       guild.id,
       actor,
       'channels.update',
-      `allowed: ${allowed.map(label).join(', ') || 'all'}; task channel: ${taskChannelId ? label(taskChannelId) : 'source channel'}; context messages: ${contextMessages}; only @mentions forwarded: ${mentionOnlyReplies ? 'yes' : 'no'}`
+      `allowed: ${allowed.map(label).join(', ') || 'all'}; task channel: ${taskChannelId ? label(taskChannelId) : 'source channel'}; context messages: ${contextMessages}; only @mentions forwarded: ${mentionOnlyReplies ? 'yes' : 'no'}` +
+        (ignored.size ? `; ignored channels the editor can't view: ${[...ignored].map(label).join(', ')}` : '')
     );
     return c.redirect(`/g/${guild.id}/channels?saved=1`);
   });
@@ -582,12 +608,13 @@ export function createWebApp(deps: WebDeps) {
         settings,
         deps.guilds.mcpToken(guild.id),
         null,
-        noticeFrom(c)
+        noticeFrom(c),
+        c.get('member').isAdmin
       )
     );
   });
 
-  app.post('/g/:guildId/mcp/token', async (c) => {
+  app.post('/g/:guildId/mcp/token', adminOnly, async (c) => {
     const { session, guild, actor } = ctx(c);
     const rotated = Boolean(deps.guilds.mcpToken(guild.id));
     const { token, hash, hint } = newMcpToken();
@@ -603,12 +630,13 @@ export function createWebApp(deps: WebDeps) {
         settings,
         deps.guilds.mcpToken(guild.id),
         token,
-        null
+        null,
+        true
       )
     );
   });
 
-  app.post('/g/:guildId/mcp/channels', async (c) => {
+  app.post('/g/:guildId/mcp/channels', adminOnly, async (c) => {
     const { guild, actor } = ctx(c);
     const form = (await c.req.parseBody({ all: true })) as Form;
     const { channels } = await mcpChannelSettings(guild.id);
@@ -631,7 +659,7 @@ export function createWebApp(deps: WebDeps) {
     return c.redirect(`/g/${guild.id}/mcp?saved=1`);
   });
 
-  app.post('/g/:guildId/mcp/remove', (c) => {
+  app.post('/g/:guildId/mcp/remove', adminOnly, (c) => {
     const { guild, actor } = ctx(c);
     if (deps.guilds.mcpToken(guild.id)) {
       deps.guilds.clearMcpToken(guild.id);

@@ -1,6 +1,10 @@
 # devin4discord
 
+[![Website](https://img.shields.io/badge/Website-devin4discord.com-5865F2?style=for-the-badge)](https://devin4discord.com) [![Docs](https://img.shields.io/badge/Docs-Read%20the%20guide-5865F2?style=for-the-badge)](https://devin4discord.com/docs) [![Join the Discord community](https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white&style=for-the-badge)](https://discord.gg/Hvys84HkCd)
+
 Hand Discord messages to Devin and follow the work in a Discord thread. One hosted bot serves any number of Discord servers; each server connects its own Devin organization and picks who may use it in a web UI.
+
+**[Add it to your server at devin4discord.com](https://devin4discord.com)** · [Docs](https://devin4discord.com/docs) · [Discord community](https://discord.gg/Hvys84HkCd)
 
 - **Start a task** in one of four ways:
   - Mention the bot: `@Devin fix the login page`. The thread opens on that message.

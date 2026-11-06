@@ -637,6 +637,10 @@ test('the landing page, docs and images are public', async () => {
     assert.equal(image.headers.get('content-type'), 'image/png');
     assert.deepEqual([...new Uint8Array(await image.arrayBuffer()).slice(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
   }
+  const logo = await t.request('/assets/logo.svg');
+  assert.equal(logo.status, 200);
+  assert.equal(logo.headers.get('content-type'), 'image/svg+xml');
+  assert.match(await logo.text(), /^<svg /);
   assert.equal((await t.request('/assets/missing.png')).status, 404);
 });
 

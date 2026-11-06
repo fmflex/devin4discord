@@ -27,6 +27,8 @@ import {
   signIn,
   type DiscordIdentity
 } from './oauth.ts';
+import { readFileSync } from 'node:fs';
+import { docsPage } from './docs.ts';
 import { SESSION_TTL_MS, type SessionStore, type WebSession } from './sessions.ts';
 import {
   CSS,
@@ -43,6 +45,13 @@ import {
   type MentionSettings,
   type PickerRow
 } from './views.ts';
+
+const ASSETS: Record<string, Uint8Array<ArrayBuffer>> = Object.fromEntries(
+  ['logo.png', 'favicon.png', 'apple-touch-icon.png', 'avatar.png'].map((name) => [
+    name,
+    new Uint8Array(readFileSync(new URL(`./assets/${name}`, import.meta.url)))
+  ])
+);
 
 export const SESSION_COOKIE = 'd4d_session';
 export const STATE_COOKIE = 'd4d_oauth_state';
@@ -233,6 +242,17 @@ export function createWebApp(deps: WebDeps) {
     return c.body(CSS);
   });
 
+  for (const [name, bytes] of Object.entries(ASSETS)) {
+    app.get(`/assets/${name}`, (c) => {
+      c.header('Content-Type', 'image/png');
+      c.header('Cache-Control', 'public, max-age=86400');
+      return c.body(bytes);
+    });
+  }
+  app.get('/favicon.ico', (c) => c.redirect('/assets/favicon.png', 301));
+
+  app.get('/docs', (c) => c.html(docsPage(c.get('session'), deps.publicUrl)));
+
   app.get('/healthz', (c) => c.text('ok'));
 
   app.get('/auth/login', async (c) => {
@@ -294,7 +314,7 @@ export function createWebApp(deps: WebDeps) {
 
   app.get('/', async (c) => {
     const session = c.get('session');
-    if (!session) return c.html(landingPage());
+    if (!session) return c.html(landingPage({ invite: inviteUrl(deps.discordClientId, deps.botPermissions), publicUrl: deps.publicUrl }));
     const rows: PickerRow[] = [];
     for (const guild of session.guilds) {
       const row = {

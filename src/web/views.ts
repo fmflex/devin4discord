@@ -17,6 +17,8 @@ export type PageOptions = {
   session?: WebSession | null;
   guild?: { id: string; name: string; tab: GuildTab };
   notice?: { kind: 'ok' | 'error'; text: string } | null;
+  /** Link-preview tags for public pages; `url` is the absolute page URL. */
+  meta?: { description: string; url: string; image: string };
   body: Html | Html[];
 };
 
@@ -26,7 +28,9 @@ function avatarUrl(session: WebSession) {
     : null;
 }
 
-const DOCS = {
+export const REPO_URL = 'https://github.com/fmflex/devin4discord';
+
+export const DOCS = {
   serviceUsers: 'https://docs.devin.ai/api-reference/authentication#service-users-recommended-for-automation',
   permissions: 'https://docs.devin.ai/api-reference/v3/overview',
   createSession: 'https://docs.devin.ai/api-reference/v3/sessions/post-organizations-sessions',
@@ -35,7 +39,7 @@ const DOCS = {
   discordIds: 'https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID'
 };
 
-function doc(href: string, text: string) {
+export function doc(href: string, text: string) {
   return html`<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`;
 }
 
@@ -65,17 +69,30 @@ export function layout(page: PageOptions) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${page.title} · devin4discord</title>
 <link rel="stylesheet" href="/assets/app.css?v=${CSS_VERSION}">
+<link rel="icon" type="image/png" href="/assets/favicon.png">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<meta name="theme-color" content="#5865f2">
+${page.meta
+  ? html`<meta name="description" content="${page.meta.description}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="devin4discord">
+<meta property="og:title" content="${page.title}">
+<meta property="og:description" content="${page.meta.description}">
+<meta property="og:url" content="${page.meta.url}">
+<meta property="og:image" content="${page.meta.image}">`
+  : ''}
 </head>
 <body>
 <header class="top">
-  <a class="brand" href="/">devin4discord</a>
-  ${session
-    ? html`<div class="me">
-        ${avatar ? html`<img class="avatar" src="${avatar}" alt="">` : ''}
+  <a class="brand" href="/"><img src="/assets/logo.png" alt="" width="32" height="32">devin4discord</a>
+  <div class="me">
+    <a class="navlink" href="/docs">Docs</a>
+    ${session
+      ? html`${avatar ? html`<img class="avatar" src="${avatar}" alt="">` : ''}
         <span>${session.username}</span>
-        <form method="post" action="/auth/logout">${csrfField(session)}<button class="link">Sign out</button></form>
-      </div>`
-    : ''}
+        <form method="post" action="/auth/logout">${csrfField(session)}<button class="link">Sign out</button></form>`
+      : html`<a class="navlink" href="/auth/login">Sign in</a>`}
+  </div>
 </header>
 <main>
   ${guild
@@ -88,17 +105,53 @@ export function layout(page: PageOptions) {
   ${page.notice ? html`<p class="notice ${page.notice.kind}">${page.notice.text}</p>` : ''}
   ${page.body}
 </main>
+<footer class="foot">
+  <a href="/docs">Docs</a> · <a href="${REPO_URL}" target="_blank" rel="noopener noreferrer">Source on GitHub</a>
+  <p>An independent project. Not made by or affiliated with Discord or Cognition.</p>
+</footer>
 </body>
 </html>`;
 }
 
-export function landingPage() {
+const FEATURES: [string, Html][] = [
+  ['Start from any message', html`Mention <strong>@Devin</strong>, react with 🤖, right-click a message → <strong>Apps → Send to Devin</strong>, or run <code>/devin start</code>. Devin gets the message, its images and files, and a link back to it.`],
+  ['One thread per task', html`Devin's updates, PR links and status changes land in a thread. Whoever asked gets pinged when a PR opens or Devin needs an answer.`],
+  ['Reply like you normally would', html`Type in the thread and Devin gets it, screenshots included. Start a message with <code>//</code> to keep it between humans.`],
+  ['Roles decide who can do what', html`Pick which roles can start tasks, reply, stop tasks or change settings. Cap ACUs per task, tasks per day and tasks running at once.`],
+  ['Your Devin org, your key', html`Each server connects its own Devin organization with a service user key. The key is stored encrypted and never shown again. Usage goes to your org.`],
+  ['Devin can use Discord too', html`Turn on the MCP server and Devin can read its thread, check channels you allow and post updates while it works.`]
+];
+
+export function landingPage(links: { invite: string; publicUrl: string }) {
   return layout({
-    title: 'Sign in',
-    body: html`<section class="card hero">
-      <h1>Devin for Discord</h1>
-      <p>Start and follow Devin tasks from your Discord server. Sign in to set up a server you manage.</p>
-      <a class="button" href="/auth/login">Sign in with Discord</a>
+    title: 'Devin, in your Discord server',
+    meta: {
+      description: 'Mention @Devin in Discord to hand off a task. Follow the work and reply in a thread.',
+      url: `${links.publicUrl}/`,
+      image: `${links.publicUrl}/assets/avatar.png`
+    },
+    body: html`<section class="hero">
+      <img class="hero-logo" src="/assets/logo.png" alt="devin4discord otter" width="128" height="128">
+      <h1>Devin, in your Discord server</h1>
+      <p class="lead">Mention <strong>@Devin</strong> on a bug report or feature request. Devin picks it up, works in a thread and posts PRs there. Your team follows along and replies right in Discord.</p>
+      <div class="actions">
+        <a class="button" href="${links.invite}">Add to Discord</a>
+        <a class="button secondary" href="/auth/login">Sign in to set up</a>
+      </div>
+      <p class="muted small">Free and open source. You bring your own Devin organization.</p>
+    </section>
+    <section class="features">${FEATURES.map(
+      ([title, text]) => html`<div class="card feature"><h2>${title}</h2><p>${text}</p></div>`
+    )}</section>
+    <section class="card setup">
+      <h2>Set it up in a few minutes</h2>
+      <ol class="steps">
+        <li><strong>Add the bot</strong> to a server where you have Manage Server.</li>
+        <li><strong>Sign in with Discord</strong> here and open the server.</li>
+        <li><strong>Connect Devin:</strong> paste a service user key and your organization ID.</li>
+        <li><strong>Pick roles and channels</strong>, then try <code>@Devin say hi</code> in a channel.</li>
+      </ol>
+      <p class="muted small">You need a Devin organization with API access. <a href="/docs#getting-started">Full setup guide</a></p>
     </section>`
   });
 }
@@ -471,11 +524,25 @@ export const CSS = `
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
 a{color:#00a8fc}code{background:#1e1f22;padding:1px 5px;border-radius:4px;font-size:13px}
 .top{display:flex;justify-content:space-between;align-items:center;padding:12px 24px;background:#111214}
-.brand{color:#fff;font-weight:700;text-decoration:none;font-size:17px}
+.brand{display:flex;align-items:center;gap:10px;color:#fff;font-weight:700;text-decoration:none;font-size:17px}.brand img{border-radius:50%}
+.navlink{color:var(--text);text-decoration:none;font-weight:600}.navlink:hover{color:#fff;text-decoration:underline}
 .me{display:flex;gap:10px;align-items:center}.me form{margin:0}.avatar{width:28px;height:28px;border-radius:50%}
 main{max-width:1000px;margin:0 auto;padding:24px}
 .card{background:var(--card);border-radius:8px;padding:20px 24px;margin-bottom:20px;max-width:680px}.card.wide{max-width:none}
-.card.danger{border:1px solid #5c2a2c}.hero{text-align:center;margin:60px auto}
+.card.danger{border:1px solid #5c2a2c}
+.hero{text-align:center;margin:48px auto 40px;max-width:680px}.hero h1{font-size:32px;margin:16px 0 12px;color:#fff}
+.hero-logo{border-radius:50%;box-shadow:0 0 0 6px rgba(88,101,242,.25)}.lead{font-size:17px;color:var(--text)}
+.actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}.actions .button{margin-top:8px}
+.features{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:20px}
+.feature{margin:0;max-width:none}.feature h2{font-size:16px;color:#fff}.feature p{margin:0;color:var(--text)}
+.setup{max-width:none}
+.docs{display:grid;grid-template-columns:200px minmax(0,1fr);gap:24px;align-items:start}
+.toc{position:sticky;top:16px;display:flex;flex-direction:column;gap:2px}.toc p{margin:0 0 6px;text-transform:uppercase;letter-spacing:.04em}
+.toc a{color:var(--muted);text-decoration:none;padding:4px 10px;border-radius:4px}.toc a:hover{color:#fff;background:var(--card)}
+.docs-body .card{max-width:760px}.doc{scroll-margin-top:16px}.doc h2 a.anchor{color:#fff;text-decoration:none}.doc h2 a.anchor:hover::after{content:" #";color:var(--muted)}
+.doc ul ul{margin:4px 0}.faq dt{font-weight:600;color:#fff;margin-top:12px}.faq dd{margin:4px 0 0}
+@media (max-width:760px){.docs{grid-template-columns:1fr}.toc{position:static;flex-flow:row wrap}}
+.foot{max-width:1000px;margin:0 auto;padding:8px 24px 32px;color:var(--muted);font-size:13px}.foot a{color:var(--muted)}.foot p{margin:4px 0 0}
 h1{font-size:22px;margin:0 0 12px}h2{font-size:18px;margin:0 0 8px}
 .muted{color:var(--muted)}.small{font-size:13px}.nowrap{white-space:nowrap}
 label{display:block;margin:14px 0 4px;font-weight:600}

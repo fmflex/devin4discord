@@ -493,3 +493,23 @@ test('"Run as Devin users" takes only org users, only from Discord Administrator
   );
   assert.equal(t.guilds.settings(G)?.instructions, 'Open PRs as drafts.');
 });
+
+test('the landing page, docs and images are public', async () => {
+  const t = setup();
+  const home = await t.request('/');
+  assert.equal(home.status, 200);
+  const page = await home.text();
+  assert.match(page, /https:\/\/discord\.com\/oauth2\/authorize\?[^"]*scope=bot/);
+  assert.match(page, /href="\/auth\/login"/);
+  assert.match(page, new RegExp(`og:image" content="${PUBLIC}/assets/avatar.png"`));
+  const docs = await t.request('/docs');
+  assert.equal(docs.status, 200);
+  assert.match(await docs.text(), /id="getting-started"/);
+  for (const name of ['logo.png', 'favicon.png', 'apple-touch-icon.png', 'avatar.png']) {
+    const image = await t.request(`/assets/${name}`);
+    assert.equal(image.status, 200, name);
+    assert.equal(image.headers.get('content-type'), 'image/png');
+    assert.deepEqual([...new Uint8Array(await image.arrayBuffer()).slice(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
+  }
+  assert.equal((await t.request('/assets/missing.png')).status, 404);
+});

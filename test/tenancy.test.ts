@@ -182,6 +182,7 @@ function botSetup() {
     }
   };
   const taskThreads: { channelId: string; private: boolean }[] = [];
+  const deletedThreads = new Set<string>();
   const chat: ChatPort = {
     async createTaskThread(channelId, _title, _intro, options) {
       taskThreads.push({ channelId, private: Boolean(options?.private) });
@@ -192,6 +193,9 @@ function botSetup() {
       return `thread-on-${messageId}`;
     },
     async addThreadMember() {},
+    async threadExists(threadId) {
+      return !deletedThreads.has(threadId);
+    },
     async send(channelId, content) {
       sent.push({ channelId, content });
     }
@@ -219,6 +223,7 @@ function botSetup() {
     sent,
     threadsOnMessage,
     taskThreads,
+    deletedThreads,
     configure,
     advance: (ms: number) => (now += ms),
     /** Holds every Devin `startTask` call until the returned function is called. */
@@ -250,6 +255,17 @@ test('every trigger in an unconfigured server gets the setup link', async () => 
   ];
   for (const outcome of outcomes) assert.deepEqual(outcome, { ok: false, reason: 'unconfigured', reply: expected });
   assert.equal(t.started.length, 0);
+});
+
+test('a message whose task thread was deleted can be sent to Devin again', async () => {
+  const t = botSetup();
+  t.configure();
+  const admin = member({ isAdmin: true });
+  assert.equal((await t.bot.startFromMessage(G, admin, channel, message)).reply, 'Devin task started: <#thread-1>');
+  assert.equal((await t.bot.startFromMessage(G, admin, channel, message)).reply, 'That message already has a task: <#thread-1>');
+  t.deletedThreads.add('thread-1');
+  assert.equal((await t.bot.startFromMessage(G, admin, channel, message)).reply, 'Devin task started: <#thread-2>');
+  assert.equal(t.started.length, 2);
 });
 
 test('triggers are gated by role permissions, channels and limits', async () => {

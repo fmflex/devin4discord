@@ -113,6 +113,14 @@ export function discordChat(client: Client): ChatPort {
       return thread.id;
     },
 
+    async threadExists(threadId) {
+      try {
+        return Boolean(await client.channels.fetch(threadId));
+      } catch (error) {
+        return !(error instanceof DiscordAPIError && error.code === RESTJSONErrorCodes.UnknownChannel);
+      }
+    },
+
     async addThreadMember(threadId, userId) {
       const channel = await fetchChannel(threadId);
       if (channel.isThread()) await channel.members.add(userId);

@@ -15,6 +15,7 @@ function setup() {
   const forwarded: { taskId: string; text: string }[] = [];
   const threadsOnMessage: { channelId: string; messageId: string; title: string }[] = [];
   const controls: string[] = [];
+  const deleted = new Set<string>();
   const updates = new Map<string, TaskUpdate | Error>();
   let nextTask = 1;
 
@@ -29,6 +30,9 @@ function setup() {
     },
     async addThreadMember(threadId, userId) {
       members.push([threadId, userId]);
+    },
+    async threadExists(threadId) {
+      return !deleted.has(threadId);
     },
     async send(channelId, content, ping, buttons, files) {
       sent.push({
@@ -71,7 +75,7 @@ function setup() {
   };
   const store = new TaskStore(openDatabase(':memory:'));
   const bridge = new Bridge({ devin: (guildId) => (guildId === 'g1' ? devin : null), store, chat, ignorePrefix: '//' });
-  return { bridge, store, sent, members, threads, threadsOnMessage, started, forwarded, updates, controls };
+  return { bridge, store, sent, members, threads, threadsOnMessage, started, forwarded, updates, controls, deleted };
 }
 
 const opener = { discordId: '10', name: 'Admin' };
@@ -118,6 +122,16 @@ test('the same message does not start a second task', async () => {
   const again = await t.bridge.start({ kind: 'message', ...base, channelId: 'chan', message });
   assert.deepEqual(again, { started: false, threadId: 'thread-1' });
   assert.equal(t.started.length, 1);
+});
+
+test('a message whose task thread was deleted starts a new task', async () => {
+  const t = setup();
+  await t.bridge.start({ kind: 'message', ...base, channelId: 'chan', message });
+  t.deleted.add('thread-1');
+  const again = await t.bridge.start({ kind: 'message', ...base, channelId: 'chan', message });
+  assert.deepEqual(again, { started: true, threadId: 'thread-2', url: 'https://agent.test/task-2' });
+  assert.equal(t.started.length, 2);
+  assert.equal(t.store.bySourceMessage(message.id)?.taskId, 'task-2');
 });
 
 test('sync relays messages without pings, pings on PRs and waiting, and never repeats', async () => {

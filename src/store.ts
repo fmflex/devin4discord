@@ -124,6 +124,11 @@ export class TaskStore {
     this.db.prepare('update tasks set source_message_id = null, updated_at = ? where task_id = ?').run(Date.now(), taskId);
   }
 
+  /** Deletes finished or stopped tasks with no activity since `before`; returns how many. */
+  pruneInactive(before: number): number {
+    return Number(this.db.prepare('delete from tasks where active = 0 and updated_at < ?').run(before).changes);
+  }
+
   active(): TaskRow[] {
     return (
       this.db.prepare('select * from tasks where active = 1 order by updated_at').all() as Raw[]

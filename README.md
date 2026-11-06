@@ -58,7 +58,7 @@ The token decides which server a call is for. The MCP page picks separate Read a
 
 ## Hosting it
 
-`.env` holds only host settings; everything per server is stored in SQLite, with Devin keys encrypted (AES-256-GCM, key derived from `MASTER_KEY`).
+`.env` holds only host settings; everything per server is stored in SQLite, with Devin keys encrypted (AES-256-GCM, key derived from `MASTER_KEY`). Server settings are kept until changed. Activity data is pruned hourly: audit log entries after 30 days, finished or stopped tasks 30 days after their last activity (replies in those threads no longer reach Devin), and expired web sign-ins.
 
 1. **Discord app.** Create one at https://discord.com/developers/applications. Use a separate app for this bot: on start-up it replaces the app's commands.
    - **Bot:** reset and copy the token. Enable **Message Content Intent**.

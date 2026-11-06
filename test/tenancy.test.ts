@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
-import { PermissionsBitField } from 'discord.js';
+import { ChannelType, PermissionFlagsBits, PermissionsBitField } from 'discord.js';
 import { Bot, unconfiguredReply } from '../src/bot.ts';
 import { Bridge, type ChatPort } from '../src/bridge.ts';
 import { Secrets, sha256 } from '../src/crypto.ts';
@@ -523,6 +523,39 @@ test('the setup UI asks Discord for the member instead of trusting the cache', a
   const member = await discordDirectory(client as never).member(guild.id, '42');
   assert.deepEqual(calls, [{ user: '42', force: true }]);
   assert.deepEqual(member, { id: '42', name: 'Ex-mod', roleIds: [guild.id], isAdmin: false, canManageGuild: false });
+});
+
+test('visibleChannels uses the live member\'s own channel permissions', async () => {
+  const calls: unknown[] = [];
+  const viewer = { id: '42' };
+  const channel = (id: string, type: ChannelType, canRead: boolean) => ({
+    id,
+    type,
+    permissionsFor: (who: unknown) => {
+      assert.equal(who, viewer);
+      return new PermissionsBitField(canRead ? PermissionFlagsBits.ViewChannel | PermissionFlagsBits.ReadMessageHistory : PermissionFlagsBits.ViewChannel);
+    }
+  });
+  const guild = {
+    id: '900000000000000001',
+    members: {
+      fetch: async (options: unknown) => {
+        calls.push(options);
+        return viewer;
+      }
+    },
+    channels: {
+      fetch: async () =>
+        new Map([
+          ['1', channel('1', ChannelType.GuildText, true)],
+          ['2', channel('2', ChannelType.GuildText, false)],
+          ['3', channel('3', ChannelType.GuildVoice, true)]
+        ])
+    }
+  };
+  const client = { guilds: { cache: new Map([[guild.id, guild]]) } };
+  assert.deepEqual(await discordDirectory(client as never).visibleChannels(guild.id, '42'), ['1']);
+  assert.deepEqual(calls, [{ user: '42', force: true }]);
 });
 
 test('/devin list hides a task when the visibility check fails', async () => {

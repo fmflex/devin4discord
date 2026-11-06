@@ -35,7 +35,7 @@ function setup(
     return new Response(JSON.stringify(hit.body), { status: hit.status });
   }) as typeof fetch;
   const { identity } = devFixtures(G);
-  const state = { member: memberOf };
+  const state = { member: memberOf, visible: ['400000000000000001', '400000000000000003'] };
   const directory: Directory = {
     hasGuild: (id) => id === G,
     guildName: () => 'Test server',
@@ -47,7 +47,8 @@ function setup(
     channels: async () => [
       { id: '400000000000000001', name: 'general', kind: 'text', category: null, position: 0 },
       { id: '400000000000000003', name: 'bug-reports', kind: 'forum', category: 'Community', position: 1 }
-    ]
+    ],
+    visibleChannels: async () => state.visible
   };
   const app = createWebApp({
     publicUrl: PUBLIC,
@@ -420,7 +421,7 @@ test('dev login is only enabled with NODE_ENV=development and DEV_LOGIN_GUILD_ID
     secrets: t.secrets,
     guilds: t.guilds,
     sessions: new SessionStore(t.db),
-    directory: { hasGuild: () => false, guildName: () => null, member: async () => null, roles: async () => [], channels: async () => [] }
+    directory: { hasGuild: () => false, guildName: () => null, member: async () => null, roles: async () => [], channels: async () => [], visibleChannels: async () => [] }
   });
   assert.equal((await prod.request(`${PUBLIC}/auth/dev`)).status, 404);
 });
@@ -482,16 +483,111 @@ test('"Run as Devin users" takes only org users, only from Discord Administrator
 
   t.state.member = { id: USER, name: 'Dev', roleIds: [G, SETTINGS_ROLE], isAdmin: false, canManageGuild: true };
   const page = await (await t.request(path, { headers: { cookie: session } })).text();
-  assert.match(page, /<textarea name="user_map"[^>]* readonly>/);
+  assert.match(page, /<fieldset disabled>[\s\S]*<textarea name="user_map"/);
   const denied = await post(t, path, session, { ...keep, user_map: '100000000000000002 user-alice' });
-  assert.equal(denied.status, 400);
-  assert.match(await denied.text(), /Only Discord Administrators can change/);
+  assert.equal(denied.status, 403);
+  assert.match(await denied.text(), /Only Discord Administrators can change this/);
   assert.deepEqual(t.guilds.devin(G)!.userMap, { '100000000000000002': 'user-bob' });
-  assert.equal(
-    (await post(t, path, session, { ...keep, user_map: changed, instructions: 'Open PRs as drafts.' })).status,
-    302
-  );
-  assert.equal(t.guilds.settings(G)?.instructions, 'Open PRs as drafts.');
+});
+
+const SETTINGS_ONLY: MemberSnapshot = { id: USER, name: 'Mod', roleIds: [G, SETTINGS_ROLE], isAdmin: false, canManageGuild: false };
+const NO_LIMITS = { maxAcu: null, tasksPerDay: null, concurrentTasks: null };
+
+test('a role-granted settings holder can view but not change permissions, the Devin connection or MCP', async () => {
+  const t = setup();
+  const { session, csrf } = await signIn(t);
+  t.responses.set('GET /v3/self', { status: 200, body: { principal_type: 'service_user', org_id: 'org-1' } });
+  t.responses.set('GET /v3/organizations/org-1/sessions', { status: 200, body: { items: [] } });
+  const devin = { _csrf: csrf, api_key: 'cog_live_secret_4f2a', org_id: 'org-1', repos: '', user_map: '', instructions: '' };
+  assert.equal((await post(t, `/g/${G}/devin`, session, devin)).status, 302);
+  const rules = [{ roleId: SETTINGS_ROLE, permissions: ['settings' as const], limits: NO_LIMITS }];
+  t.guilds.setRoleRules(G, rules);
+  const before = t.guilds.auditLog(G).length;
+
+  for (const member of [SETTINGS_ONLY, { ...SETTINGS_ONLY, canManageGuild: true }]) {
+    t.state.member = member;
+    for (const tab of ['devin', 'permissions', 'mcp']) {
+      const page = await t.request(`/g/${G}/${tab}`, { headers: { cookie: session } });
+      assert.equal(page.status, 200);
+      const text = await page.text();
+      assert.match(text, /<fieldset disabled>/);
+      assert.match(text, /Only Discord Administrators can change these settings/);
+      assert.doesNotMatch(text, /mcp\/remove|devin\/remove/);
+    }
+
+    const escalate = await post(t, `/g/${G}/permissions`, session, {
+      _csrf: csrf,
+      [`p_${SETTINGS_ROLE}`]: 'start_tasks',
+      p_administrator: 'reply'
+    });
+    assert.equal(escalate.status, 403);
+    assert.deepEqual(t.guilds.roleRules(G), rules);
+
+    const swap = await post(t, `/g/${G}/devin`, session, { ...devin, api_key: 'cog_attacker_key_9999', org_id: 'org-evil' });
+    assert.equal(swap.status, 403);
+    assert.equal(t.guilds.devin(G)!.orgId, 'org-1');
+    assert.equal(t.guilds.devin(G)!.apiKeyHint, '4f2a');
+    assert.equal((await post(t, `/g/${G}/devin/remove`, session, { _csrf: csrf })).status, 403);
+    assert.ok(t.guilds.devin(G));
+
+    const token = await post(t, `/g/${G}/mcp/token`, session, { _csrf: csrf });
+    assert.equal(token.status, 403);
+    assert.doesNotMatch(await token.text(), /d4d_/);
+    assert.equal(t.guilds.mcpToken(G), null);
+    assert.equal((await post(t, `/g/${G}/mcp/channels`, session, { _csrf: csrf, read: '400000000000000001' })).status, 403);
+    assert.deepEqual(t.guilds.mcpReadChannels(G), []);
+    assert.equal((await post(t, `/g/${G}/mcp/remove`, session, { _csrf: csrf })).status, 403);
+  }
+  assert.equal(t.guilds.auditLog(G).length, before);
+});
+
+test('members who are not Administrators only change Channels tab entries they can view', async () => {
+  const t = setup();
+  const { session, csrf } = await signIn(t);
+  const MODS = '400000000000000002';
+  t.directory.channels = async () => [
+    { id: '400000000000000001', name: 'general', kind: 'text', category: null, position: 0 },
+    { id: MODS, name: 'mods', kind: 'text', category: null, position: 1, public: false },
+    { id: '400000000000000003', name: 'bug-reports', kind: 'forum', category: 'Community', position: 2 }
+  ];
+  t.guilds.setRoleRules(G, [{ roleId: SETTINGS_ROLE, permissions: ['settings'], limits: NO_LIMITS }]);
+  t.state.member = SETTINGS_ONLY;
+  const path = `/g/${G}/channels`;
+
+  const page = await (await t.request(path, { headers: { cookie: session } })).text();
+  assert.match(page, new RegExp(`name="allowed" value="${MODS}"[^>]* disabled`));
+  assert.match(page, new RegExp(`name="task_channel" value="${MODS}"[^>]* disabled`));
+  assert.doesNotMatch(page, /name="allowed" value="400000000000000001"[^>]* disabled/);
+  assert.match(page, /hidden from you/);
+
+  const grab = new URLSearchParams([
+    ['_csrf', csrf],
+    ['allowed', '400000000000000001'],
+    ['allowed', MODS],
+    ['task_channel', MODS]
+  ]);
+  const saved = await t.request(path, {
+    method: 'POST',
+    headers: { cookie: session, origin: PUBLIC, 'content-type': 'application/x-www-form-urlencoded' },
+    body: grab
+  });
+  assert.equal(saved.status, 302);
+  assert.deepEqual(t.guilds.allowedChannels(G), ['400000000000000001']);
+  assert.equal(t.guilds.settings(G)?.taskChannelId ?? null, null);
+  assert.match(t.guilds.auditLog(G)[0].detail, /ignored channels the editor can't view: #mods$/);
+
+  t.guilds.setChannels(G, [MODS], MODS);
+  assert.equal((await post(t, path, session, { _csrf: csrf, allowed: '400000000000000001' })).status, 302);
+  assert.deepEqual(t.guilds.allowedChannels(G).sort(), ['400000000000000001', MODS]);
+  assert.equal(t.guilds.settings(G)?.taskChannelId, MODS);
+  assert.equal((await post(t, path, session, { _csrf: csrf, task_channel: '' })).status, 302);
+  assert.deepEqual(t.guilds.allowedChannels(G), [MODS]);
+  assert.equal(t.guilds.settings(G)?.taskChannelId ?? null, null);
+
+  t.state.member = { id: USER, name: 'Dev', roleIds: [G], isAdmin: true, canManageGuild: true };
+  assert.equal((await post(t, path, session, { _csrf: csrf, allowed: '400000000000000001', task_channel: MODS })).status, 302);
+  assert.deepEqual(t.guilds.allowedChannels(G), ['400000000000000001']);
+  assert.equal(t.guilds.settings(G)?.taskChannelId, MODS);
 });
 
 test('the landing page, docs and images are public', async () => {

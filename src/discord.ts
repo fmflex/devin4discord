@@ -269,6 +269,25 @@ export function discordDirectory(client: Client): Directory {
         });
       }
       return result;
+    },
+    async visibleChannels(guildId, userId) {
+      const guild = client.guilds.cache.get(guildId);
+      if (!guild) return [];
+      let member: GuildMember;
+      try {
+        member = await guild.members.fetch({ user: userId, force: true });
+      } catch {
+        return [];
+      }
+      const channels = await guild.channels.fetch();
+      return [...channels.values()]
+        .filter(
+          (channel) =>
+            channel &&
+            CHANNEL_KINDS[channel.type] &&
+            channel.permissionsFor(member).has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory])
+        )
+        .map((channel) => channel!.id);
     }
   };
 }

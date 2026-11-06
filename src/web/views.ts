@@ -77,6 +77,7 @@ export function layout(page: PageOptions) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${page.title} · devin4discord</title>
 <link rel="stylesheet" href="/assets/app.css?v=${CSS_VERSION}">
+<link rel="icon" type="image/svg+xml" href="/assets/logo.svg">
 <link rel="icon" type="image/png" href="/assets/favicon.png">
 <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
 <meta name="theme-color" content="#5865f2">
@@ -92,43 +93,95 @@ ${page.meta
 </head>
 <body>
 <header class="top">
-  <a class="brand" href="/"><img src="/assets/logo.png" alt="" width="32" height="32">devin4discord</a>
-  <div class="me">
+  <div class="top-in">
+  <a class="brand" href="/"><img src="/assets/logo.svg" alt="" width="32" height="32"><span>devin<b>4</b>discord</span></a>
+  <nav class="me" aria-label="Account">
     <a class="navlink" href="/docs">Docs</a>
     ${session
-      ? html`${avatar ? html`<img class="avatar" src="${avatar}" alt="">` : ''}
-        <span>${session.username}</span>
-        <form method="post" action="/auth/logout">${csrfField(session)}<button class="link">Sign out</button></form>`
-      : html`<a class="navlink" href="/auth/login">Sign in</a>`}
+      ? html`<a class="navlink" href="/">Servers</a>
+        <span class="user">${avatar ? html`<img class="avatar" src="${avatar}" alt="">` : html`<span class="avatar blank">${session.username.slice(0, 1)}</span>`}<span class="username">${session.username}</span></span>
+        <form method="post" action="/auth/logout">${csrfField(session)}<button class="button ghost small">Sign out</button></form>`
+      : html`<a class="button small" href="/auth/login">Sign in</a>`}
+  </nav>
   </div>
 </header>
 <main>
   ${guild
-    ? html`<p class="crumbs"><a href="/">Servers</a> / ${guild.name}</p>
-      <nav class="tabs">${tabs.map(
+    ? html`<div class="guildhead">
+        <a class="crumbs" href="/">← All servers</a>
+        <h1><span class="icon blank" aria-hidden="true">${guild.name.slice(0, 1)}</span>${guild.name}</h1>
+      </div>
+      <nav class="tabs" aria-label="Server settings">${tabs.map(
         ([tab, label]) =>
-          html`<a href="/g/${guild.id}/${tab}" class="${tab === guild.tab ? 'active' : ''}">${label}</a>`
+          html`<a href="/g/${guild.id}/${tab}" class="${tab === guild.tab ? 'active' : ''}"${tab === guild.tab ? raw(' aria-current="page"') : ''}>${label}</a>`
       )}</nav>`
     : ''}
   ${page.notice ? html`<p class="notice ${page.notice.kind}">${page.notice.text}</p>` : ''}
   ${page.body}
 </main>
 <footer class="foot">
-  <a href="/docs">Docs</a> · <a href="${REPO_URL}" target="_blank" rel="noopener noreferrer">Source on GitHub</a>
-  <p>An independent project. Not made by or affiliated with Discord or Cognition.</p>
+  <div class="foot-in">
+    <a class="brand small" href="/"><img src="/assets/logo.svg" alt="" width="22" height="22"><span>devin<b>4</b>discord</span></a>
+    <nav><a href="/docs">Docs</a><a href="${REPO_URL}" target="_blank" rel="noopener noreferrer">GitHub</a><a href="${REPO_URL}/issues" target="_blank" rel="noopener noreferrer">Report an issue</a></nav>
+  </div>
+  <p>An independent, open source project. Not made by or affiliated with Discord or Cognition.</p>
 </footer>
 </body>
 </html>`;
 }
 
-const FEATURES: [string, Html][] = [
-  ['Start from any message', html`Mention <strong>@Devin</strong>, react with 🤖, right-click a message → <strong>Apps → Send to Devin</strong>, or run <code>/devin start</code>. Devin gets the message, its images and files, and a link back to it.`],
-  ['One thread per task', html`Devin's updates, PR links and status changes land in a thread. Whoever asked gets pinged when a PR opens or Devin needs an answer.`],
-  ['Reply like you normally would', html`Type in the thread and Devin gets it, screenshots included. Start a message with <code>//</code> to keep it between humans.`],
-  ['Roles decide who can do what', html`Pick which roles can start tasks, reply, stop tasks or change settings. Cap ACUs per task, tasks per day and tasks running at once.`],
-  ['Your Devin org, your key', html`Each server connects its own Devin organization with a service user key. The key is stored encrypted and never shown again. Usage goes to your org.`],
-  ['Devin can use Discord too', html`Turn on the MCP server and Devin can read its thread, check channels you allow and post updates while it works.`]
+const ICONS = {
+  at: '<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/>',
+  thread: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8M8 13h5"/>',
+  reply: '<polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14.5 8.5l2 2"/>',
+  plug: '<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/>'
+} as const;
+
+function icon(name: keyof typeof ICONS) {
+  return raw(`<svg class="ico" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`);
+}
+
+const FEATURES: [keyof typeof ICONS, string, Html][] = [
+  ['at', 'Start from any message', html`Mention <strong>@Devin</strong>, react with 🤖, right-click a message → <strong>Apps → Send to Devin</strong>, or run <code>/devin start</code>. Devin gets the message, its images and files, and a link back to it.`],
+  ['thread', 'One thread per task', html`Devin's updates, PR links and status changes land in a thread. Whoever asked gets pinged when a PR opens or Devin needs an answer.`],
+  ['reply', 'Reply like you normally would', html`Type in the thread and Devin gets it, screenshots included. Start a message with <code>//</code> to keep it between humans.`],
+  ['shield', 'Roles decide who can do what', html`Pick which roles can start tasks, reply, stop tasks or change settings. Cap ACUs per task, tasks per day and tasks running at once.`],
+  ['key', 'Your Devin org, your key', html`Each server connects its own Devin organization with a service user key. The key is stored encrypted and never shown again. Usage goes to your org.`],
+  ['plug', 'Devin can use Discord too', html`Turn on the MCP server and Devin can read its thread, check channels you allow and post updates while it works.`]
 ];
+
+const SETUP_STEPS: [string, Html][] = [
+  ['Add the bot', html`to a server where you have Manage Server.`],
+  ['Sign in with Discord', html`here and open the server.`],
+  ['Connect Devin', html`with a service user key and your organization ID.`],
+  ['Pick roles and channels', html`then try <code>@Devin say hi</code> in a channel.`]
+];
+
+/** A static picture of a task in Discord, so visitors see what the bot does before signing in. */
+const DEMO = html`<div class="demo" aria-hidden="true">
+  <div class="demo-bar"><span class="muted">#</span> bug-reports</div>
+  <div class="msg">
+    <span class="pfp" style="background:#eb459e">M</span>
+    <div><p class="who">Mia <span class="when">Today at 14:02</span></p>
+      <p><span class="mention">@Devin</span> the login page redirects to a 404 after sign-in</p></div>
+  </div>
+  <div class="thread">
+    <p class="thread-title">Devin: the login page redirects to a 404…</p>
+    <div class="msg">
+      <img class="pfp" src="/assets/logo.svg" alt="">
+      <div><p class="who">Devin <span class="tag">APP</span> <span class="when">14:02</span></p>
+        <p>On it. The callback drops the <code>next</code> parameter; fixing it now.</p></div>
+    </div>
+    <div class="msg">
+      <img class="pfp" src="/assets/logo.svg" alt="">
+      <div><p class="who">Devin <span class="tag">APP</span> <span class="when">14:19</span></p>
+        <p><span class="mention">@Mia</span> PR is ready for review</p>
+        <div class="embed"><strong>#128 Keep the redirect target through sign-in</strong><span>acme/web · 2 files changed · checks passing</span></div></div>
+    </div>
+  </div>
+</div>`;
 
 export function landingPage(links: { invite: string; publicUrl: string }) {
   return layout({
@@ -139,26 +192,24 @@ export function landingPage(links: { invite: string; publicUrl: string }) {
       image: `${links.publicUrl}/assets/avatar.png`
     },
     body: html`<section class="hero">
-      <img class="hero-logo" src="/assets/logo.png" alt="devin4discord otter" width="128" height="128">
-      <h1>Devin, in your Discord server</h1>
-      <p class="lead">Mention <strong>@Devin</strong> on a bug report or feature request. Devin picks it up, works in a thread and posts PRs there. Your team follows along and replies right in Discord.</p>
-      <div class="actions">
-        <a class="button" href="${links.invite}">Add to Discord</a>
-        <a class="button secondary" href="/auth/login">Sign in to set up</a>
+      <div class="hero-text">
+        <p class="eyebrow">Free and open source</p>
+        <h1>Devin, in your <span class="grad">Discord server</span></h1>
+        <p class="lead">Mention <strong>@Devin</strong> on a bug report or feature request. Devin picks it up, works in a thread and posts PRs there. Your team follows along and replies right in Discord.</p>
+        <div class="actions">
+          <a class="button big" href="${links.invite}">Add to Discord</a>
+          <a class="button secondary big" href="/auth/login">Sign in to set up</a>
+        </div>
+        <p class="muted small">You bring your own Devin organization. <a href="/docs">Read the docs</a></p>
       </div>
-      <p class="muted small">Free and open source. You bring your own Devin organization.</p>
+      ${DEMO}
     </section>
     <section class="features">${FEATURES.map(
-      ([title, text]) => html`<div class="card feature"><h2>${title}</h2><p>${text}</p></div>`
+      ([name, title, text]) => html`<div class="card feature">${icon(name)}<h2>${title}</h2><p>${text}</p></div>`
     )}</section>
     <section class="card setup">
       <h2>Set it up in a few minutes</h2>
-      <ol class="steps">
-        <li><strong>Add the bot</strong> to a server where you have Manage Server.</li>
-        <li><strong>Sign in with Discord</strong> here and open the server.</li>
-        <li><strong>Connect Devin:</strong> paste a service user key and your organization ID.</li>
-        <li><strong>Pick roles and channels</strong>, then try <code>@Devin say hi</code> in a channel.</li>
-      </ol>
+      <ol class="flow">${SETUP_STEPS.map(([title, text]) => html`<li><strong>${title}</strong> ${text}</li>`)}</ol>
       <p class="muted small">You need a Devin organization with API access. <a href="/docs#getting-started">Full setup guide</a></p>
     </section>`
   });
@@ -182,7 +233,7 @@ export function pickerPage(session: WebSession, rows: PickerRow[], inviteAny: st
     title: 'Servers',
     session,
     body: html`<section class="card">
-      <div class="row between"><h1>Your servers</h1><a class="button secondary" href="${inviteAny}">Add to Discord</a></div>
+      <div class="row between"><div><h1>Your servers</h1><p class="muted small">Servers where you can set up devin4discord.</p></div><a class="button secondary" href="${inviteAny}">Add to another server</a></div>
       ${rows.length
         ? html`<ul class="servers">${rows.map(
             (row) => html`<li>
@@ -190,8 +241,8 @@ export function pickerPage(session: WebSession, rows: PickerRow[], inviteAny: st
               <span class="grow">${row.name}</span>
               ${row.action === 'configure'
                 ? html`<span class="pill ${row.configured ? 'ok' : 'warn'}">${row.configured ? 'Set up' : 'Not set up'}</span>
-                    <a class="button" href="/g/${row.id}/devin">Configure</a>`
-                : html`<a class="button secondary" href="${row.inviteUrl}">Add to Discord</a>`}
+                    <a class="button${row.configured ? ' secondary' : ''}" href="/g/${row.id}/devin">Configure</a>`
+                : html`<span class="pill">Bot not added</span><a class="button secondary" href="${row.inviteUrl}">Add to Discord</a>`}
             </li>`
           )}</ul>`
         : html`<p class="muted">No servers you can configure. You need Administrator or Manage Server, or a role with the "Change settings" permission, in a server with the bot.</p>`}
@@ -239,21 +290,24 @@ export function devinPage(
         <p>${doc(DOCS.permissions, 'Devin docs: API overview')}</p>`)}
         <input name="org_id" value="${form.orgId}" placeholder="org-…" required spellcheck="false">
       </label>
-      <label>Default repos <span class="muted">(one per line, owner/repo)</span> ${help('default repos', html`<p>Repositories every task starts with, for example <code>fmflex/devin4discord</code>. They're sent as the new session's <code>repos</code>, so Devin starts in the right code.</p>
+      <label>Default repos ${help('default repos', html`<p>Repositories every task starts with, for example <code>fmflex/devin4discord</code>. They're sent as the new session's <code>repos</code>, so Devin starts in the right code.</p>
         <p>Leave empty to send none.</p>
         <p>${doc(DOCS.createSession, 'Devin docs: create session')}</p>`)}
+        <span class="hint">One per line, as owner/repo.</span>
         <textarea name="repos" rows="3" spellcheck="false">${form.repos}</textarea>
       </label>
-      <label>Run as Devin users <span class="muted">(optional, one per line: Discord user ID, space, Devin user ID)</span> ${help('running as Devin users', html`<p>By default every task is created by the service user. List a Discord member here with their Devin user ID (<code>user-…</code>), and tasks they start and replies they send are made as that Devin user.</p>
+      <label>Run as Devin users <span class="optional">Optional</span> ${help('running as Devin users', html`<p>By default every task is created by the service user. List a Discord member here with their Devin user ID (<code>user-…</code>), and tasks they start and replies they send are made as that Devin user.</p>
         <p>Example: <code>123456789012345678 user-0123abcd…</code></p>
         <p>To copy a Discord user ID, turn on Developer Mode in Discord (User Settings → Advanced), then right-click the member → Copy User ID.</p>
         <p>Only Discord Administrators can change this list. Each Devin user is checked to be in the organization before saving, and every change is written to the audit log.</p>
         <p>Needs <code>ImpersonateOrgSessions</code> and <code>ViewOrgMembership</code> on the service user. The Devin user must be in the organization and allowed to use Devin.</p>
         <p>${doc(DOCS.discordIds, 'Discord: finding IDs')} · ${doc(DOCS.createSession, 'Devin docs: create_as_user_id')}</p>`)}
+        <span class="hint">One per line: Discord user ID, a space, then the Devin user ID.</span>
         <textarea name="user_map" rows="3" spellcheck="false">${form.userMap}</textarea>
       </label>
-      <label>Extra instructions <span class="muted">(added to every task; a default is used when empty)</span> ${help('extra instructions', html`<p>Added to the prompt of every task from this server, for example your conventions or "open PRs as drafts".</p>
+      <label>Extra instructions <span class="optional">Optional</span> ${help('extra instructions', html`<p>Added to the prompt of every task from this server, for example your conventions or "open PRs as drafts".</p>
         <p>When empty, this default is used: <em>${DEFAULT_INSTRUCTIONS}</em></p>`)}
+        <span class="hint">Added to every task. A default is used when empty.</span>
         <textarea name="instructions" rows="3">${form.instructions}</textarea>
       </label>
       <button class="button">Check and save</button>`)}
@@ -612,77 +666,138 @@ export function errorPage(session: WebSession | null, title: string, text: strin
 }
 
 export const CSS = `
-:root{color-scheme:dark;--bg:#1e1f22;--card:#2b2d31;--line:#3f4147;--text:#dbdee1;--muted:#949ba4;--accent:#5865f2;--ok:#23a55a;--warn:#f0b232;--bad:#da373c}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
-a{color:#00a8fc}code{background:#1e1f22;padding:1px 5px;border-radius:4px;font-size:13px}
-.top{display:flex;justify-content:space-between;align-items:center;padding:12px 24px;background:#111214}
-.brand{display:flex;align-items:center;gap:10px;color:#fff;font-weight:700;text-decoration:none;font-size:17px}.brand img{border-radius:50%}
-.navlink{color:var(--text);text-decoration:none;font-weight:600}.navlink:hover{color:#fff;text-decoration:underline}
-.me{display:flex;gap:10px;align-items:center}.me form{margin:0}.avatar{width:28px;height:28px;border-radius:50%}
-main{max-width:1000px;margin:0 auto;padding:24px}
-.card{background:var(--card);border-radius:8px;padding:20px 24px;margin-bottom:20px;max-width:680px}.card.wide{max-width:none}
-.card.danger{border:1px solid #5c2a2c}
-.hero{text-align:center;margin:48px auto 40px;max-width:680px}.hero h1{font-size:32px;margin:16px 0 12px;color:#fff}
-.hero-logo{border-radius:50%;box-shadow:0 0 0 6px rgba(88,101,242,.25)}.lead{font-size:17px;color:var(--text)}
-.actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}.actions .button{margin-top:8px}
+:root{color-scheme:dark;--bg:#0e0f13;--card:#17181e;--card-2:#1e2028;--field:#0b0c10;--line:rgba(255,255,255,.08);--line-2:rgba(255,255,255,.14);--text:#e3e5e8;--muted:#9a9fac;--accent:#5865f2;--accent-2:#8891ff;--ok:#23a55a;--warn:#f0b232;--bad:#ed4245;--radius:12px}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;min-height:100vh;display:flex;flex-direction:column;background:radial-gradient(1100px 480px at 50% -220px,rgba(88,101,242,.28),transparent 70%),var(--bg);color:var(--text);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--accent-2);text-underline-offset:2px}a:hover{color:#b3b9ff}
+:focus-visible{outline:2px solid var(--accent-2);outline-offset:2px}
+code{background:var(--field);border:1px solid var(--line);padding:1px 6px;border-radius:5px;font-size:13px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+h1,h2,h3{color:#fff;letter-spacing:-.01em}h1{font-size:24px;margin:0 0 12px}h2{font-size:18px;margin:0 0 8px}h3{font-size:15px;margin:24px 0 8px}
+.top{position:sticky;top:0;z-index:20;background:rgba(14,15,19,.75);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+.top-in{max-width:1080px;margin:0 auto;padding:12px 24px;display:flex;justify-content:space-between;align-items:center;gap:16px}
+.brand{display:inline-flex;align-items:center;gap:10px;color:#fff;font-weight:800;text-decoration:none;font-size:17px;letter-spacing:-.02em}.brand:hover{color:#fff}
+.brand img{border-radius:9px;box-shadow:0 2px 10px rgba(88,101,242,.45)}.brand b{color:var(--accent-2);font-weight:inherit}
+.brand.small{font-size:14px;gap:8px}.brand.small img{border-radius:6px;box-shadow:none}
+.navlink{color:var(--muted);text-decoration:none;font-weight:600;padding:6px 10px;border-radius:8px}.navlink:hover{color:#fff;background:rgba(255,255,255,.06)}
+.me{display:flex;gap:6px;align-items:center}.me form{margin:0}
+.user{display:inline-flex;align-items:center;gap:8px;margin:0 6px 0 8px;padding-left:14px;border-left:1px solid var(--line);font-weight:600}
+.avatar{width:28px;height:28px;border-radius:50%;flex:none}.avatar.blank{display:inline-flex;align-items:center;justify-content:center;background:var(--accent);color:#fff;font-size:13px;text-transform:uppercase}
+main{flex:1;width:100%;max-width:1080px;margin:0 auto;padding:32px 24px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:24px 28px;margin-bottom:20px}
+.card > :last-child{margin-bottom:0}
+.card.danger{border-color:rgba(237,66,69,.35);background:linear-gradient(rgba(237,66,69,.05),rgba(237,66,69,.05)),var(--card)}.card.danger h2{color:#ff8a8c}
+.card.danger .button{margin-top:4px}
+.hero{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:48px;align-items:center;margin:32px 0 56px}
+.eyebrow{display:inline-block;margin:0 0 16px;padding:4px 12px;border:1px solid rgba(136,145,255,.35);border-radius:999px;background:rgba(88,101,242,.12);color:#c3c8ff;font-size:13px;font-weight:600}
+.hero h1{font-size:clamp(34px,5vw,52px);line-height:1.08;margin:0 0 18px;letter-spacing:-.03em}
+.grad{background:linear-gradient(90deg,#8891ff,#eb459e);-webkit-background-clip:text;background-clip:text;color:transparent}
+.lead{font-size:18px;color:#c9ccd3;margin:0 0 8px}
+.actions{display:flex;gap:12px;flex-wrap:wrap;margin:24px 0 12px}.actions .button{margin-top:0}
+.demo{background:#313338;border:1px solid var(--line-2);border-radius:16px;padding:0 0 16px;box-shadow:0 30px 80px rgba(0,0,0,.55),0 0 0 6px rgba(88,101,242,.12);font-size:14px;overflow:hidden;color:#dbdee1}
+.demo p{margin:0}.demo code{background:#232428;border:0}
+.demo-bar{padding:12px 16px;border-bottom:1px solid #26272b;font-weight:700;color:#f2f3f5;margin-bottom:14px}
+.msg{display:flex;gap:12px;padding:4px 16px}.msg + .msg{margin-top:10px}
+.pfp{width:36px;height:36px;border-radius:50%;flex:none;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-weight:700}
+.who{font-weight:600;color:#f2f3f5}.when{color:#949ba4;font-size:12px;font-weight:400;margin-left:4px}
+.tag{background:#5865f2;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:4px;vertical-align:1px}
+.mention{background:rgba(88,101,242,.3);color:#c9cdfb;border-radius:3px;padding:0 2px;font-weight:500}
+.thread{margin:14px 16px 0 64px;padding:12px 0 2px;border-left:2px solid #4e5058;border-radius:0 8px 8px 0;background:#2b2d31}
+.thread .msg{padding:4px 14px}.thread-title{font-weight:700;color:#f2f3f5;padding:0 14px 8px;font-size:13px}
+.embed{margin-top:8px;padding:10px 12px;background:#232428;border-left:4px solid var(--ok);border-radius:4px;display:flex;flex-direction:column;gap:2px}.embed strong{color:#00a8fc}.embed span{color:#b5bac1;font-size:12px}
 .features{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:20px}
-.feature{margin:0;max-width:none}.feature h2{font-size:16px;color:#fff}.feature p{margin:0;color:var(--text)}
-.setup{max-width:none}
-.docs{display:grid;grid-template-columns:200px minmax(0,1fr);gap:24px;align-items:start}
-.toc{position:sticky;top:16px;display:flex;flex-direction:column;gap:2px}.toc p{margin:0 0 6px;text-transform:uppercase;letter-spacing:.04em}
-.toc a{color:var(--muted);text-decoration:none;padding:4px 10px;border-radius:4px}.toc a:hover{color:#fff;background:var(--card)}
-.docs-body .card{max-width:760px}.doc{scroll-margin-top:16px}.doc h2 a.anchor{color:#fff;text-decoration:none}.doc h2 a.anchor:hover::after{content:" #";color:var(--muted)}
-.doc ul ul{margin:4px 0}.faq dt{font-weight:600;color:#fff;margin-top:12px}.faq dd{margin:4px 0 0}
-@media (max-width:760px){.docs{grid-template-columns:1fr}.toc{position:static;flex-flow:row wrap}}
-.foot{max-width:1000px;margin:0 auto;padding:8px 24px 32px;color:var(--muted);font-size:13px}.foot a{color:var(--muted)}.foot p{margin:4px 0 0}
-h1{font-size:22px;margin:0 0 12px}h2{font-size:18px;margin:0 0 8px}
+.feature{margin:0;transition:border-color .15s,transform .15s}.feature:hover{border-color:rgba(136,145,255,.35);transform:translateY(-2px)}
+.feature h2{font-size:16px;margin-top:14px}.feature p{margin:0;color:#c3c6cd}
+.ico{display:block;width:40px;height:40px;padding:9px;border-radius:10px;background:rgba(88,101,242,.16);color:var(--accent-2)}
+.flow{list-style:none;counter-reset:step;padding:0;margin:16px 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.flow li{counter-increment:step;background:var(--card-2);border:1px solid var(--line);border-radius:10px;padding:16px;color:#c3c6cd}
+.flow li::before{content:counter(step);display:flex;align-items:center;justify-content:center;width:28px;height:28px;margin-bottom:10px;border-radius:50%;background:var(--accent);color:#fff;font-weight:700;font-size:14px}
+.flow li strong{display:block;color:#fff}
+.docs{display:grid;grid-template-columns:200px minmax(0,1fr);gap:28px;align-items:start}
+.toc{position:sticky;top:84px;display:flex;flex-direction:column;gap:2px}.toc p{margin:0 0 6px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;font-size:11px}
+.toc a{color:var(--muted);text-decoration:none;padding:6px 10px;border-radius:8px;font-weight:500}.toc a:hover{color:#fff;background:rgba(255,255,255,.06)}
+.docs-body .card{max-width:780px}.doc{scroll-margin-top:84px}.doc h2 a.anchor{color:#fff;text-decoration:none}.doc h2 a.anchor:hover::after{content:" #";color:var(--muted)}
+.doc ul ul{margin:4px 0}.faq dt{font-weight:600;color:#fff;margin-top:14px}.faq dd{margin:4px 0 0;color:#c3c6cd}
+.foot{border-top:1px solid var(--line);color:var(--muted);font-size:13px;padding:24px;margin-top:24px}
+.foot-in{max-width:1032px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+.foot nav{display:flex;gap:18px}.foot nav a{color:var(--muted);text-decoration:none}.foot nav a:hover{color:#fff}
+.foot > p{max-width:1032px;margin:10px auto 0}
 .muted{color:var(--muted)}.small{font-size:13px}.nowrap{white-space:nowrap}
-label{display:block;margin:14px 0 4px;font-weight:600}
-fieldset{border:0;margin:0;padding:0;min-width:0}fieldset:disabled .button{opacity:.5;cursor:not-allowed}
-label.check{display:flex;gap:8px;align-items:center}
+label{display:block;margin:20px 0 4px;font-weight:600;color:#fff}
+.hint{display:block;font-weight:400;font-size:13px;color:var(--muted);margin-top:2px}
+.optional{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);background:rgba(255,255,255,.06);border-radius:4px;padding:1px 6px;margin-left:4px;vertical-align:1px}
+fieldset{border:0;margin:0;padding:0;min-width:0}fieldset:disabled .button{opacity:.5;cursor:not-allowed}fieldset:disabled input,fieldset:disabled textarea{opacity:.7}
+label.check{display:flex;gap:10px;align-items:center;font-weight:500;margin:10px 0 4px}
 label.check input{width:auto;margin:0}
 input.narrow{max-width:120px;display:block}
-input,textarea{width:100%;margin-top:6px;padding:9px 10px;background:#1e1f22;border:1px solid var(--line);border-radius:4px;color:var(--text);font:inherit;font-weight:400}
-input[type=checkbox],input[type=radio]{width:18px;height:18px;margin:0;accent-color:var(--accent)}
-input.num{width:90px;margin:0;padding:5px 8px}
-.button{display:inline-block;margin-top:16px;padding:9px 16px;background:var(--accent);color:#fff;border:0;border-radius:4px;font:inherit;font-weight:600;cursor:pointer;text-decoration:none}
-.button.secondary{background:#4e5058}.button.danger{background:var(--bad)}
+input,textarea{width:100%;margin-top:8px;padding:10px 12px;background:var(--field);border:1px solid var(--line-2);border-radius:8px;color:var(--text);font:inherit;font-weight:400;transition:border-color .15s,box-shadow .15s}
+textarea{resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px}
+input:hover,textarea:hover{border-color:rgba(255,255,255,.22)}
+input:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(88,101,242,.3)}
+input[readonly]{color:var(--muted)}
+input::placeholder,textarea::placeholder{color:#6b7080}
+input[type=checkbox],input[type=radio]{width:18px;height:18px;margin:0;accent-color:var(--accent);cursor:pointer;box-shadow:none}
+input.num{width:96px;margin:0;padding:6px 10px}
+.button{display:inline-flex;align-items:center;justify-content:center;gap:8px;margin-top:20px;padding:10px 18px;background:var(--accent);color:#fff;border:1px solid transparent;border-radius:8px;font:inherit;font-weight:600;cursor:pointer;text-decoration:none;transition:background .15s,transform .05s,box-shadow .15s;box-shadow:0 1px 0 rgba(255,255,255,.12) inset}
+.button:hover{background:#4752c4;color:#fff}.button:active{transform:translateY(1px)}
+.button.secondary{background:rgba(255,255,255,.07);border-color:var(--line-2)}.button.secondary:hover{background:rgba(255,255,255,.12)}
+.button.danger{background:var(--bad)}.button.danger:hover{background:#c93b3e}
+.button.ghost{background:transparent;border-color:var(--line-2);color:var(--muted);box-shadow:none}.button.ghost:hover{color:#fff;background:rgba(255,255,255,.06)}
+.button.small{margin:0;padding:6px 12px;font-size:14px}.button.big{padding:12px 22px;font-size:16px}
 .servers .button,.row .button{margin-top:0}
 button.link{background:none;border:0;color:var(--muted);cursor:pointer;font:inherit;text-decoration:underline}
-.row{display:flex;align-items:center;gap:12px}.between{justify-content:space-between}.grow{flex:1}
-.servers{list-style:none;padding:0;margin:12px 0}.servers li{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
-.icon{width:40px;height:40px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:#4e5058;font-weight:700}
-.pill{font-size:12px;padding:2px 8px;border-radius:10px}.pill.ok{background:#1c3d2a;color:#6ddf9a}.pill.warn{background:#4a3a14;color:var(--warn)}
-.crumbs{margin:0 0 8px;color:var(--muted)}
-.tabs{display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--line)}
-.tabs a{padding:8px 14px;color:var(--muted);text-decoration:none;border-bottom:2px solid transparent}.tabs a.active{color:#fff;border-color:var(--accent)}
-.notice{padding:10px 14px;border-radius:6px;max-width:680px}.notice.ok{background:#1c3d2a}.notice.error{background:#4a1f21}
-.scroll{overflow-x:auto}
-table.grid{width:100%;border-collapse:collapse;margin-top:8px}.grid th,.grid td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
-.grid th{font-size:12px;text-transform:uppercase;color:var(--muted);font-weight:600}.grid .center{text-align:center}
-.grid tr.group td{font-size:12px;text-transform:uppercase;color:var(--muted);padding-top:16px}
+.row{display:flex;align-items:center;gap:12px}.between{justify-content:space-between}.grow{flex:1;font-weight:600;color:#fff}
+.row h1{margin:0}.row p{margin:4px 0 0}
+.servers{list-style:none;padding:0;margin:20px 0 16px;display:flex;flex-direction:column;gap:8px}
+.servers li{display:flex;align-items:center;gap:14px;padding:12px 14px;background:var(--card-2);border:1px solid var(--line);border-radius:10px;transition:border-color .15s}.servers li:hover{border-color:var(--line-2)}
+.icon{width:40px;height:40px;border-radius:50%;flex:none;display:inline-flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#5865f2,#8891ff);color:#fff;font-weight:700;text-transform:uppercase}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;background:rgba(255,255,255,.07);color:var(--muted)}
+.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.pill.ok{background:rgba(35,165,90,.15);color:#6ddf9a}.pill.warn{background:rgba(240,178,50,.14);color:var(--warn)}
+.guildhead{margin-bottom:8px}.guildhead h1{display:flex;align-items:center;gap:12px;margin:6px 0 16px;font-size:26px}
+.crumbs{color:var(--muted);text-decoration:none;font-size:14px;font-weight:500}.crumbs:hover{color:#fff}
+.tabs{display:flex;gap:4px;margin-bottom:24px;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
+.tabs a{padding:10px 14px;color:var(--muted);text-decoration:none;font-weight:600;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;border-radius:8px 8px 0 0}
+.tabs a:hover{color:#fff;background:rgba(255,255,255,.04)}.tabs a.active{color:#fff;border-color:var(--accent)}
+.notice{display:flex;gap:10px;align-items:flex-start;padding:12px 16px;border-radius:10px;border:1px solid;margin:0 0 20px}
+.notice::before{flex:none;width:20px;height:20px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#0e0f13;margin-top:1px}
+.notice.ok{background:rgba(35,165,90,.1);border-color:rgba(35,165,90,.35)}.notice.ok::before{content:"✓";background:#6ddf9a}
+.notice.error{background:rgba(237,66,69,.1);border-color:rgba(237,66,69,.35)}.notice.error::before{content:"!";background:#ff8a8c}
+.card .notice{display:block}.card .notice::before{display:none}
+.scroll{overflow-x:auto;margin:0 -8px;padding:0 8px}
+table.grid{width:100%;border-collapse:collapse;margin-top:12px}.grid th,.grid td{padding:9px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
+.grid th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:700;background:var(--card-2)}
+.grid thead th:first-child{border-radius:8px 0 0 8px}.grid thead th:last-child{border-radius:0 8px 8px 0}
+.grid thead th{border-bottom:0}.grid .center{text-align:center}
+.grid tbody tr:not(.group):hover td{background:rgba(255,255,255,.025)}
+.grid tr.group td{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding-top:18px}
 tr.noaccess td:first-child { opacity: .55 }
-.listtools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0 0}
+.listtools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:16px 0 0}
 .listtools input[type=search]{flex:1 1 220px;width:auto;margin:0}.listtools .button{margin-top:0}
-.listtools label.check{margin:0;font-weight:400;white-space:nowrap}
-label.fold{display:inline-flex;gap:8px;align-items:center;margin:0;cursor:pointer;font-weight:600;user-select:none}
+.listtools label.check{margin:0;font-weight:500;white-space:nowrap}
+label.fold{display:inline-flex;gap:8px;align-items:center;margin:0;cursor:pointer;font-weight:700;user-select:none;color:var(--muted)}
+label.fold:hover{color:#fff}
 label.fold input{position:absolute;opacity:0;width:1px;height:1px}
 label.fold .cat::before{content:"▾";display:inline-block;width:14px}
 tbody:has(label.fold input:checked) label.fold .cat::before{content:"▸"}
 label.fold:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
-label.fold .count{text-transform:none;font-weight:400}
+label.fold .count{text-transform:none;font-weight:600;letter-spacing:0;color:var(--accent-2);background:rgba(88,101,242,.15);padding:0 8px;border-radius:999px}
 tbody:has(label.fold input:checked) tr:not(.group){display:none}
 form:has(.only-ticked:checked) tbody tr:not(.group):not(:has(input[name]:checked)){display:none}
 form:has(.only-ticked:checked) tbody:not(:has(input[name]:checked)){display:none}
 .none-ticked{display:none}form:has(.only-ticked:checked):not(:has(tbody input[name]:checked)) .none-ticked{display:block}
 .help{display:inline-block;position:relative;margin-left:4px;vertical-align:middle;font-size:13px;font-weight:400;text-transform:none;letter-spacing:normal}
-.help summary{list-style:none;cursor:pointer;width:17px;height:17px;border-radius:50%;background:#4e5058;color:#fff;font-size:11px;font-weight:700;line-height:17px;text-align:center;user-select:none}
-.help summary::-webkit-details-marker{display:none}.help summary:hover,.help[open] summary{background:var(--accent)}
-.help .tip{position:absolute;z-index:10;top:24px;left:-10px;width:320px;max-width:80vw;padding:10px 14px;background:#111214;border:1px solid var(--line);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.5);color:var(--text);line-height:1.45;white-space:normal;text-align:left}
+.help summary{list-style:none;cursor:pointer;width:18px;height:18px;border-radius:50%;background:rgba(255,255,255,.1);color:#c3c6cd;font-size:11px;font-weight:700;line-height:18px;text-align:center;user-select:none;transition:background .15s}
+.help summary::-webkit-details-marker{display:none}.help summary:hover,.help[open] summary{background:var(--accent);color:#fff}
+.help .tip{position:absolute;z-index:10;top:26px;left:-10px;width:340px;max-width:80vw;padding:12px 16px;background:#0b0c10;border:1px solid var(--line-2);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.6);color:var(--text);line-height:1.5;white-space:normal;text-align:left;font-weight:400;font-size:13px}
 .help.end .tip{left:auto;right:-10px}.help .tip p{margin:0 0 8px}.help .tip p:last-child{margin:0}
-.grid td.role{white-space:nowrap}
+.grid td.role{white-space:nowrap;font-weight:600}
 .grid.audit td{vertical-align:top}.grid.audit td.detail{overflow-wrap:anywhere}
-.steps{padding-left:20px;margin:6px 0}.steps li{margin:4px 0}code.token{display:inline-block;margin-top:6px;word-break:break-all;user-select:all}h3{font-size:15px;margin:18px 0 6px}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px}
+.steps{padding-left:22px;margin:8px 0}.steps li{margin:6px 0}.steps li::marker{color:var(--muted)}
+code.token{display:inline-block;margin-top:8px;padding:6px 10px;word-break:break-all;user-select:all;font-size:14px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:10px}
+@media (max-width:860px){.hero{grid-template-columns:1fr;gap:32px;margin-top:8px}.docs{grid-template-columns:1fr}.toc{position:static;flex-flow:row wrap}}
+@media (max-width:600px){main{padding:20px 14px}.top-in{padding:10px 14px}.card{padding:18px}.username,.me .navlink[href="/"]{display:none}.user{margin:0 2px;padding-left:8px}.thread{margin-left:16px}.row.between{flex-wrap:wrap}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
 `;
 
 /** Changes whenever the CSS does, so browsers don't keep a cached copy after an update. */

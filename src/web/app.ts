@@ -48,7 +48,7 @@ import {
 } from './views.ts';
 
 const ASSETS: Record<string, Uint8Array<ArrayBuffer>> = Object.fromEntries(
-  ['logo.png', 'favicon.png', 'apple-touch-icon.png', 'avatar.png'].map((name) => [
+  ['logo.svg', 'logo.png', 'favicon.png', 'apple-touch-icon.png', 'avatar.png'].map((name) => [
     name,
     new Uint8Array(readFileSync(new URL(`./assets/${name}`, import.meta.url)))
   ])
@@ -245,7 +245,7 @@ export function createWebApp(deps: WebDeps) {
 
   for (const [name, bytes] of Object.entries(ASSETS)) {
     app.get(`/assets/${name}`, (c) => {
-      c.header('Content-Type', 'image/png');
+      c.header('Content-Type', name.endsWith('.svg') ? 'image/svg+xml' : 'image/png');
       c.header('Cache-Control', 'public, max-age=86400');
       return c.body(bytes);
     });

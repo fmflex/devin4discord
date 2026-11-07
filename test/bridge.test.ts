@@ -35,6 +35,7 @@ function setup() {
       return !deleted.has(threadId);
     },
     async send(channelId, content, ping, buttons, files) {
+      if (deleted.has(channelId)) throw new Error('Unknown Channel');
       sent.push({
         channelId,
         content,
@@ -208,6 +209,27 @@ test('one failing task does not stop the others from syncing', async () => {
     console.error = originalError;
   }
   assert.deepEqual(t.sent, [{ channelId: 'thread-2', content: '**Devin:** hello' }]);
+});
+
+test('a task whose thread was deleted stops being polled without logging an error', async () => {
+  const t = setup();
+  await t.bridge.start({ kind: 'prompt', ...base, channelId: 'chan', task: 'x', attachments: [] });
+  t.deleted.add('thread-1');
+  t.updates.set('task-1', update({ messages: [{ id: 'e1', text: 'hello', files: [] }], cursor: 'e1' }));
+  const errors: unknown[] = [];
+  const originalError = console.error;
+  const originalLog = console.log;
+  console.error = (...args) => errors.push(args);
+  console.log = () => {};
+  try {
+    await t.bridge.syncAll();
+  } finally {
+    console.error = originalError;
+    console.log = originalLog;
+  }
+  assert.deepEqual(errors, []);
+  assert.equal(t.store.active().length, 0);
+  assert.equal(t.store.byId('task-1')?.stateLabel, 'thread deleted');
 });
 
 test('tasks record their server and fail in a server without Devin', async () => {

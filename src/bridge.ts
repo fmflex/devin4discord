@@ -212,6 +212,18 @@ export class Bridge {
     await this.post(row.threadId, `Put to sleep by <@${by.discordId}>. A reply in this thread wakes Devin.`);
   }
 
+  /** Starts a Devin Review of `prUrl` with the server's Devin key. */
+  async requestReview(guildId: string, prUrl: string) {
+    const devin = this.devin(guildId);
+    if (!devin) throw new Error('Devin is not set up in this server.');
+    await devin.requestReview(prUrl);
+  }
+
+  /** Posts a bot notice in a task thread. */
+  async notify(threadId: string, content: string) {
+    await this.post(threadId, content);
+  }
+
   private requireDevin(row: TaskRow) {
     const devin = row.guildId ? this.devin(row.guildId) : null;
     if (!devin) throw new Error('Devin is not set up in this server.');

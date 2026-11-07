@@ -46,6 +46,7 @@ function setup() {
   };
   const linkSessions = new Map<string, { userId: string; sessionId: string; url: string }>();
   const devin: DevinApi = {
+    async requestReview() {},
     async startTask(input) {
       started.push(input);
       const id = `task-${nextTask++}`;

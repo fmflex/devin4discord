@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { Bridge, ChatButton, StartRequest } from './bridge.ts';
 import type { Attachment, Person } from './devin.ts';
 import { DEFAULT_INSTRUCTIONS, type ForwardedMessage, type MentionContext } from './format.ts';
+import { parsePrUrl, prUrl, type GitHubApi, type PrRef } from './github.ts';
 import { DEFAULT_CONTEXT_MESSAGES, type GuildStore } from './guilds.ts';
 import {
   hasPermission,
@@ -28,7 +29,10 @@ export type DenyReason =
   | 'limit'
   | 'not_task'
   | 'empty'
-  | 'ended';
+  | 'ended'
+  | 'no_github'
+  | 'no_pr'
+  | 'failed';
 
 /** A guild message as the bot sees it; `loadContext` fetches history only once a start is allowed. */
 export type IncomingMessage = {
@@ -78,6 +82,16 @@ export function unconfiguredReply(publicUrl: string) {
   return `Devin isn't set up in this server yet. An admin can set it up at ${publicUrl}`;
 }
 
+/** A thread notice after a merge or review failed to post; the action itself already happened. */
+function logNotice(error: unknown) {
+  console.error('Posting the thread notice failed:', error);
+}
+
+function parseRepo(fullName: string) {
+  const [owner, repo, ...rest] = fullName.split('/');
+  return owner && repo && !rest.length ? { owner, repo } : null;
+}
+
 function person(member: MemberSnapshot): Person {
   return { discordId: member.id, name: member.name };
 }
@@ -97,6 +111,7 @@ export class Bot {
   private readonly tasks: TaskStore;
   private readonly publicUrl: string;
   private readonly now: () => number;
+  private readonly github: (guildId: string) => GitHubApi | null;
   /** `/devin link` codes waiting for their Devin session, per `guild:member`. Kept in memory only. */
   private readonly linkCodes = new Map<string, { code: string; issuedAt: number }>();
   /** Starts that passed the limit check but whose task row isn't written yet, per `guild:member`. */
@@ -107,6 +122,7 @@ export class Bot {
     guilds: GuildStore;
     tasks: TaskStore;
     publicUrl: string;
+    github?: (guildId: string) => GitHubApi | null;
     now?: () => number;
   }) {
     this.bridge = options.bridge;
@@ -114,6 +130,7 @@ export class Bot {
     this.tasks = options.tasks;
     this.publicUrl = options.publicUrl;
     this.now = options.now ?? Date.now;
+    this.github = options.github ?? (() => null);
   }
 
   isConfigured(guildId: string) {
@@ -414,6 +431,92 @@ export class Bot {
       ok: true,
       reply: `**${row.title}**\nStatus: ${update?.stateLabel ?? row.stateLabel ?? 'unknown'}\nTask: ${row.url}\nPull requests:\n${prs}`
     };
+  }
+
+  /**
+   * `/devin merge [pr]`: merges this task thread's PR (the newest open one), or PR `pr`: a number in
+   * the same repo, or a full PR URL. GitHub does the checks; see `GitHubClient.merge`.
+   */
+  async merge(guildId: string, member: MemberSnapshot, channelId: string, pr?: string | null): Promise<Outcome> {
+    const denied = this.check(guildId, member, ['merge_prs']);
+    if (denied) return denied;
+    const github = this.github(guildId);
+    if (!github) {
+      return deny('no_github', `Merging needs a GitHub token. An admin can add one at ${this.publicUrl}/g/${guildId}/devin`);
+    }
+    const target = await this.targetPrs(guildId, channelId, pr, 'merge');
+    if ('reply' in target) return target;
+    try {
+      let ref = target.refs[0];
+      if (!pr && target.refs.length > 1) {
+        const open = [];
+        for (const candidate of target.refs) {
+          const pull = await github.pull(candidate);
+          if (pull.open && !pull.merged) open.push(candidate);
+        }
+        if (!open.length) return deny('no_pr', "This task's pull requests are all merged or closed.");
+        if (open.length > 1) {
+          return deny('no_pr', `This task has ${open.length} open pull requests. Pick one: ${open.map((r) => `\`/devin merge pr:${r.number}\``).join(', ')}.`);
+        }
+        ref = open[0];
+      }
+      const merged = await github.merge(ref);
+      this.guilds.audit(guildId, { id: member.id, name: member.name }, 'pr.merge', `${merged.url} (${merged.method})`);
+      if (target.row) await this.bridge.notify(target.row.threadId, `Merged ${merged.url} by <@${member.id}>.`).catch(logNotice);
+      return { ok: true, reply: `Merged **${merged.title}**: ${merged.url}` };
+    } catch (error) {
+      return deny('failed', `Couldn't merge: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /** `/devin review [pr]`: asks Devin Review to review this task thread's newest PR, or PR `pr`. */
+  async review(guildId: string, member: MemberSnapshot, channelId: string, pr?: string | null): Promise<Outcome> {
+    const denied = this.check(guildId, member, ['start_tasks', 'manage_tasks']);
+    if (denied) return denied;
+    const target = await this.targetPrs(guildId, channelId, pr, 'review');
+    if ('reply' in target) return target;
+    const url = prUrl(target.refs[0]);
+    try {
+      await this.bridge.requestReview(guildId, url);
+    } catch (error) {
+      return deny('failed', `Couldn't start Devin Review: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    this.guilds.audit(guildId, { id: member.id, name: member.name }, 'pr.review', url);
+    if (target.row) await this.bridge.notify(target.row.threadId, `Devin Review requested for ${url} by <@${member.id}>.`).catch(logNotice);
+    return { ok: true, reply: `Devin Review started for ${url}. Its findings show up on the PR.` };
+  }
+
+  /** The PRs a merge or review means: `pr` if given, else this task thread's PRs, newest first. */
+  private async targetPrs(
+    guildId: string,
+    channelId: string,
+    pr: string | null | undefined,
+    verb: 'merge' | 'review'
+  ): Promise<{ refs: PrRef[]; row: TaskRow | null } | Outcome> {
+    const found = this.tasks.byThread(channelId);
+    const row = found && found.guildId === guildId ? found : null;
+    const taskPrs = async () => {
+      if (!row) return [];
+      const update = await this.bridge.sync(row).catch(() => null);
+      return (update?.pullRequests ?? row.pullRequests).flatMap((url) => parsePrUrl(url) ?? []).reverse();
+    };
+    const arg = pr?.trim();
+    if (arg) {
+      const url = parsePrUrl(arg);
+      if (url) return { refs: [url], row };
+      const number = /^#?(\d{1,9})$/.exec(arg)?.[1];
+      if (!number) return deny('no_pr', 'Give a PR number like `42` or a full GitHub PR URL.');
+      const repos = this.guilds.devin(guildId)?.defaultRepos ?? [];
+      const repo = (await taskPrs())[0] ?? (repos.length === 1 ? parseRepo(repos[0]) : null);
+      if (!repo) {
+        return deny('no_pr', `Which repo is #${number} in? Give the full URL: \`/devin ${verb} pr:https://github.com/owner/repo/pull/${number}\``);
+      }
+      return { refs: [{ owner: repo.owner, repo: repo.repo, number: Number(number) }], row };
+    }
+    if (!row) return deny('not_task', `Run this in a task thread, or name the PR: \`/devin ${verb} pr:<number or URL>\`.`);
+    const refs = await taskPrs();
+    if (!refs.length) return deny('no_pr', 'This task has no pull request yet.');
+    return { refs, row };
   }
 
   /** Recent tasks, limited to those whose thread `canView` says the member can see in Discord. */

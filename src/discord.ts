@@ -188,6 +188,22 @@ export function commandDefinitions() {
       sub.setName('sleep').setDescription("Put this thread's task to sleep; a reply wakes it")
     )
     .addSubcommand((sub) =>
+      sub
+        .setName('merge')
+        .setDescription("Merge this thread's pull request once its checks pass")
+        .addStringOption((option) =>
+          option.setName('pr').setDescription('Another PR: its number (same repo) or URL').setMaxLength(200)
+        )
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('review')
+        .setDescription("Get a Devin Review of this thread's pull request")
+        .addStringOption((option) =>
+          option.setName('pr').setDescription('Another PR: its number (same repo) or URL').setMaxLength(200)
+        )
+    )
+    .addSubcommand((sub) =>
       sub.setName('link').setDescription('Link your Devin account so the tasks you start run as you')
     )
     .addSubcommand((sub) => sub.setName('unlink').setDescription('Unlink your Devin account'));
@@ -520,6 +536,10 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore, watcher?
       );
     }
     if (sub === 'status') return bot.status(interaction.guildId, member, interaction.channelId);
+    if (sub === 'merge' || sub === 'review') {
+      const pr = interaction.options.getString('pr');
+      return bot[sub](interaction.guildId, member, interaction.channelId, pr);
+    }
     if (sub === 'link') return bot.link(interaction.guildId, member);
     if (sub === 'unlink') return bot.unlink(interaction.guildId, member);
     if (sub === 'stop' || sub === 'sleep') {

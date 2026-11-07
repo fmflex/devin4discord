@@ -8,6 +8,7 @@ import { Secrets, sha256 } from '../src/crypto.ts';
 import { discordDirectory } from '../src/discord.ts';
 import { MIGRATIONS, SCHEMA_VERSION, migrate, openDatabase } from '../src/db.ts';
 import type { DevinApi, StartTaskInput } from '../src/devin.ts';
+import { GitHubClient, parsePrUrl, type GitHubApi, type PrRef } from '../src/github.ts';
 import { GuildStore } from '../src/guilds.ts';
 import { newMcpToken } from '../src/mcp.ts';
 import {
@@ -183,6 +184,25 @@ function botSetup() {
     },
     async unarchive(taskId) {
       controls.push(`unarchive ${taskId}`);
+    },
+    async requestReview(prUrl) {
+      reviews.push(prUrl);
+    }
+  };
+  const reviews: string[] = [];
+  const merges: string[] = [];
+  const closed = new Set<number>();
+  let githubToken = true;
+  let mergeError: string | null = null;
+  const github: GitHubApi = {
+    async pull(pr: PrRef) {
+      return { title: `PR ${pr.number}`, url: `https://github.com/${pr.owner}/${pr.repo}/pull/${pr.number}`, open: !closed.has(pr.number), merged: false };
+    },
+    async merge(pr: PrRef) {
+      if (mergeError) throw new Error(mergeError);
+      const url = `https://github.com/${pr.owner}/${pr.repo}/pull/${pr.number}`;
+      merges.push(url);
+      return { title: `PR ${pr.number}`, url, method: 'merge' };
     }
   };
   const taskThreads: { channelId: string; private: boolean }[] = [];
@@ -211,7 +231,14 @@ function botSetup() {
     ignorePrefix: '//'
   });
   let now = Date.now();
-  const bot = new Bot({ bridge, guilds, tasks, publicUrl: 'https://devin.example.com', now: () => now });
+  const bot = new Bot({
+    bridge,
+    guilds,
+    tasks,
+    publicUrl: 'https://devin.example.com',
+    github: () => (githubToken ? github : null),
+    now: () => now
+  });
   const configure = () => {
     guilds.ensure(G, 'Test');
     guilds.saveDevin(G, { apiKeyEncrypted: 'x', apiKeyHint: 'abcd', orgId: 'org-1', defaultRepos: [], userMap: {} });
@@ -229,6 +256,11 @@ function botSetup() {
     taskThreads,
     deletedThreads,
     configure,
+    reviews,
+    merges,
+    closed,
+    noGithub: () => (githubToken = false),
+    failMerges: (message: string) => (mergeError = message),
     advance: (ms: number) => (now += ms),
     /** Holds every Devin `startTask` call until the returned function is called. */
     holdStarts: () => {
@@ -786,4 +818,119 @@ test('tasks started in a private thread stay in a private thread, even with a ta
     { channelId: 'tasks', private: false }
   ]);
   assert.equal(t.threadsOnMessage.length, 0);
+});
+
+const PR = (n: number) => `https://github.com/fmflex/app/pull/${n}`;
+
+test('/devin merge: merges the thread PR, needs Merge PRs and a GitHub token', async () => {
+  const t = botSetup();
+  t.configure();
+  seedTask(t, 'task-a', 'thread-a');
+  t.tasks.update('task-a', { pullRequests: [PR(1), PR(2)] });
+  const admin = member({ id: '4', isAdmin: true });
+
+  const helper = await t.bot.merge(G, member({ roleIds: [G, HELPER] }), 'thread-a');
+  assert.equal(helper.ok === false && helper.reason, 'forbidden');
+  const moderator = await t.bot.merge(G, member({ roleIds: [G, MOD] }), 'thread-a');
+  assert.equal(moderator.ok === false && moderator.reason, 'forbidden');
+
+  // Two open PRs: the member has to pick.
+  const ambiguous = await t.bot.merge(G, admin, 'thread-a');
+  assert.equal(ambiguous.ok === false && ambiguous.reason, 'no_pr');
+  assert.match(ambiguous.reply, /pr:2.*pr:1/);
+
+  t.closed.add(2);
+  const merged = await t.bot.merge(G, admin, 'thread-a');
+  assert.equal(merged.ok, true, merged.reply);
+  assert.deepEqual(t.merges, [PR(1)]);
+  assert.ok(t.sent.some((s) => s.channelId === 'thread-a' && s.content === `Merged ${PR(1)} by <@4>.`));
+  assert.equal(t.guilds.auditLog(G)[0].action, 'pr.merge');
+
+  // A number means that PR in the thread's repo, even if the thread has PRs of its own.
+  assert.equal((await t.bot.merge(G, admin, 'thread-a', '#7')).ok, true);
+  assert.equal(t.merges.at(-1), PR(7));
+  assert.equal((await t.bot.merge(G, admin, 'c1', 'https://github.com/o/r/pull/9')).ok, true);
+  assert.equal(t.merges.at(-1), 'https://github.com/o/r/pull/9');
+
+  const outside = await t.bot.merge(G, admin, 'c1');
+  assert.equal(outside.ok === false && outside.reason, 'not_task');
+  const noRepo = await t.bot.merge(G, admin, 'c1', '7');
+  assert.equal(noRepo.ok === false && noRepo.reason, 'no_pr');
+  assert.match(noRepo.reply, /full URL/);
+
+  t.failMerges('Checks are still running');
+  const failed = await t.bot.merge(G, admin, 'thread-a', '3');
+  assert.equal(failed.ok === false && failed.reason, 'failed');
+  assert.match(failed.reply, /Checks are still running/);
+
+  t.noGithub();
+  const noToken = await t.bot.merge(G, admin, 'thread-a');
+  assert.equal(noToken.ok === false && noToken.reason, 'no_github');
+});
+
+test('/devin review: reviews the newest thread PR or the one named', async () => {
+  const t = botSetup();
+  t.configure();
+  seedTask(t, 'task-a', 'thread-a');
+  const helper = member({ roleIds: [G, HELPER] });
+
+  const none = await t.bot.review(G, helper, 'thread-a');
+  assert.equal(none.ok === false && none.reason, 'no_pr');
+
+  t.tasks.update('task-a', { pullRequests: [PR(1), PR(2)] });
+  assert.equal((await t.bot.review(G, helper, 'thread-a')).ok, true);
+  assert.equal((await t.bot.review(G, helper, 'thread-a', '5')).ok, true);
+  assert.deepEqual(t.reviews, [PR(2), PR(5)]);
+  assert.ok(t.sent.some((s) => s.channelId === 'thread-a' && s.content.startsWith(`Devin Review requested for ${PR(2)}`)));
+  assert.equal(t.guilds.auditLog(G)[0].action, 'pr.review');
+
+  const outsider = await t.bot.review(G, member(), 'thread-a');
+  assert.equal(outsider.ok === false && outsider.reason, 'forbidden');
+  const outside = await t.bot.review(G, helper, 'c1');
+  assert.equal(outside.ok === false && outside.reason, 'not_task');
+});
+
+test('Merge PRs is stored per role and on by default for Administrators', () => {
+  const guilds = new GuildStore(openDatabase(':memory:'));
+  guilds.setRoleRules(G, [{ roleId: MOD, permissions: ['merge_prs'], limits: NO_LIMITS }]);
+  assert.deepEqual(guilds.roleRules(G)[0].permissions, ['merge_prs']);
+  assert.ok(hasPermission(member({ isAdmin: true }), [], 'merge_prs'));
+  assert.ok(!hasPermission(member({ roleIds: [G, MOD] }), rules, 'merge_prs'));
+});
+
+test('GitHubClient.merge only merges an open PR whose checks all passed, pinned to its head', async () => {
+  const pr = parsePrUrl('https://github.com/o/r/pull/5')!;
+  assert.deepEqual(pr, { owner: 'o', repo: 'r', number: 5 });
+  assert.equal(parsePrUrl('https://evil.test/o/r/pull/5'), null);
+  let checks = [{ name: 'ci', status: 'in_progress', conclusion: null as string | null }];
+  const calls: { method: string; url: string; body?: string }[] = [];
+  const fetchImpl = (async (url: string, init: RequestInit) => {
+    calls.push({ method: init.method ?? 'GET', url, body: init.body as string | undefined });
+    const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+    if (url.endsWith('/pulls/5')) {
+      return json({ title: 'T', html_url: 'https://github.com/o/r/pull/5', state: 'open', merged: false, mergeable: true, head: { sha: 'abc' } });
+    }
+    if (url.includes('/check-runs')) {
+      // One check per page, so every page has to be read.
+      const page = Number(new URL(url).searchParams.get('page'));
+      return json({ total_count: checks.length, check_runs: checks.slice(page - 1, page) });
+    }
+    if (url.includes('/status?')) return json({ state: 'pending', total_count: 0, statuses: [] });
+    if (url.endsWith('/repos/o/r')) return json({ allow_merge_commit: false, allow_squash_merge: true });
+    if (url.endsWith('/merge')) return json({ merged: true });
+    return new Response('{}', { status: 404 });
+  }) as typeof fetch;
+  const client = new GitHubClient('token', fetchImpl, async () => {});
+  await assert.rejects(client.merge(pr), /still running.*ci/);
+  checks = [
+    { name: 'ci', status: 'completed', conclusion: 'success' },
+    { name: 'lint', status: 'completed', conclusion: 'failure' }
+  ];
+  await assert.rejects(client.merge(pr), /Checks failed.*lint/);
+  assert.ok(!calls.some((c) => c.method === 'PUT'));
+  checks = [{ name: 'ci', status: 'completed', conclusion: 'success' }];
+  assert.deepEqual(await client.merge(pr), { title: 'T', url: 'https://github.com/o/r/pull/5', method: 'squash' });
+  const put = calls.find((c) => c.method === 'PUT')!;
+  assert.equal(put.url, 'https://api.github.com/repos/o/r/pulls/5/merge');
+  assert.deepEqual(JSON.parse(put.body!), { merge_method: 'squash', sha: 'abc' });
 });

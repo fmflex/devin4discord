@@ -134,6 +134,7 @@ Every call uses the server's service user key against the [Devin API v3](https:/
 | What | Call | Permission |
 | --- | --- | --- |
 | Start a task | `POST /v3/organizations/{org}/sessions` | `UseDevinSessions`; `ImpersonateOrgSessions` for mapped members (`create_as_user_id`) |
+| Pass Discord files to Devin (task start and replies) | [`POST /v3/organizations/{org}/attachments`](https://docs.devin.ai/api-reference/v3/attachments/post-organizations-attachments), after downloading the file from Discord's CDN; `attachment_urls` only accepts the Devin URLs this returns. A file that can't be copied is linked in the message text instead | `UseDevinSessions` |
 | Check a mapped Devin user (on save) | [`GET /v3beta1/organizations/{org}/members/users/{id}`](https://docs.devin.ai/api-reference/v3/users/get-organization-user) | `ViewOrgMembership` |
 | Follow a task | `GET …/sessions/{id}`, `GET …/sessions/{id}/messages` | `ViewOrgSessions` |
 | Upload files Devin attached | `GET /v3/organizations/{org}/attachments/{uuid}/{name}`, then the presigned URL it redirects to (without the key) | Not listed in the docs |

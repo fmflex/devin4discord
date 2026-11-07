@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { serve } from '@hono/node-server';
+import { collectAdminStats } from './admin.ts';
 import { Bot } from './bot.ts';
 import { Bridge } from './bridge.ts';
 import { loadConfig } from './config.ts';
@@ -16,6 +17,7 @@ import {
 } from './discord.ts';
 import { githubResolver } from './github.ts';
 import { GuildStore } from './guilds.ts';
+import { HostHealth } from './health.ts';
 import { createMcpHandler } from './mcp.ts';
 import { PRUNE_INTERVAL_MS, pruneOldData } from './retention.ts';
 import { TaskStore } from './store.ts';
@@ -24,6 +26,8 @@ import { createWebApp } from './web/app.ts';
 import { Watcher } from './webhooks.ts';
 import { SessionStore } from './web/sessions.ts';
 
+const health = new HostHealth();
+health.captureConsole();
 const config = loadConfig();
 const db = openDatabase(config.databasePath);
 const secrets = new Secrets(config.masterKey);
@@ -52,6 +56,22 @@ const app = createWebApp({
   guilds,
   sessions,
   directory,
+  admin: {
+    userIds: config.adminUserIds,
+    stats: () =>
+      collectAdminStats({
+        db,
+        databasePath: config.databasePath,
+        health,
+        bot: client.isReady()
+          ? {
+              ready: true,
+              pingMs: client.ws.ping >= 0 ? Math.round(client.ws.ping) : null,
+              guilds: client.guilds.cache.map((g) => ({ id: g.id, name: g.name, memberCount: g.memberCount }))
+            }
+          : null
+      })
+  },
   mcp: createMcpHandler({ publicUrl: config.publicUrl, guilds, tasks, directory, reader: discordReader(client) })
 });
 const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
@@ -92,8 +112,10 @@ while (!stopping) {
     lastPrune = Date.now();
     try {
       const pruned = pruneOldData({ tasks, guilds, sessions });
+      health.recordPrune(pruned.tasks + pruned.audit + pruned.sessions);
       if (pruned.tasks || pruned.audit || pruned.sessions) console.log('Pruned old data:', pruned);
     } catch (error) {
+      health.recordPrune(0, error);
       console.error('Pruning old data failed:', error);
     }
   }

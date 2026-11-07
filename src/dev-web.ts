@@ -5,11 +5,13 @@
  * are set; the production entry point (src/index.ts) never loads this file.
  */
 import { serve } from '@hono/node-server';
+import { collectAdminStats } from './admin.ts';
 import { Secrets } from './crypto.ts';
 import { openDatabase } from './db.ts';
 import type { ChannelInfo, Directory, RoleInfo } from './directory.ts';
 import { BOT_PERMISSIONS } from './discord.ts';
 import { GuildStore } from './guilds.ts';
+import { HostHealth } from './health.ts';
 import { createWebApp } from './web/app.ts';
 import type { DiscordIdentity } from './web/oauth.ts';
 import { SessionStore } from './web/sessions.ts';
@@ -70,8 +72,11 @@ if (import.meta.main) {
   }
   const guildId = process.env.DEV_LOGIN_GUILD_ID!.trim();
   const port = Number(process.env.PORT ?? 3000);
-  const db = openDatabase(process.env.DEV_DATABASE ?? ':memory:');
+  const databasePath = process.env.DEV_DATABASE ?? ':memory:';
+  const db = openDatabase(databasePath);
   const { identity, directory } = devFixtures(guildId);
+  const health = new HostHealth();
+  health.captureConsole();
   const app = createWebApp({
     publicUrl: `http://localhost:${port}`,
     discordClientId: '000000000000000000',
@@ -83,6 +88,16 @@ if (import.meta.main) {
     sessions: new SessionStore(db),
     directory,
     fetch: mockDevinFetch,
+    admin: {
+      userIds: [identity.user.id],
+      stats: () =>
+        collectAdminStats({
+          db,
+          databasePath,
+          health,
+          bot: { ready: true, pingMs: 42, guilds: [{ id: guildId, name: 'Rice Rotations', memberCount: 1234 }] }
+        })
+    },
     devLogin: identity
   });
   serve({ fetch: app.fetch, port }, () => {

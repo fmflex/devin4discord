@@ -13,6 +13,8 @@ export type Config = {
   databasePath: string;
   devinApiUrl: string;
   pollIntervalMs: number;
+  /** Discord user IDs that may open the host admin page at `/admin`. */
+  adminUserIds: string[];
 };
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -49,6 +51,15 @@ export function publicUrl(raw: string): string {
   return url.origin;
 }
 
+export function adminUserIds(raw: string | null): string[] {
+  if (!raw) return [];
+  const ids = raw.split(',').map((id) => id.trim()).filter(Boolean);
+  for (const id of ids) {
+    if (!/^\d{15,22}$/.test(id)) throw new Error(`ADMIN_USER_IDS must be comma-separated Discord user IDs; "${id}" isn't one.`);
+  }
+  return [...new Set(ids)];
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     discordToken: required(env, 'DISCORD_TOKEN'),
@@ -59,6 +70,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     port: positiveNumber(env, 'PORT') ?? 3000,
     databasePath: join(optional(env, 'DATA_DIR') ?? './data', 'tasks.db'),
     devinApiUrl: optional(env, 'DEVIN_API_BASE_URL') ?? DEFAULT_DEVIN_API_URL,
-    pollIntervalMs: (positiveNumber(env, 'POLL_INTERVAL_SECONDS') ?? 30) * 1000
+    pollIntervalMs: (positiveNumber(env, 'POLL_INTERVAL_SECONDS') ?? 30) * 1000,
+    adminUserIds: adminUserIds(optional(env, 'ADMIN_USER_IDS'))
   };
 }

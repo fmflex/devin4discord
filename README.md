@@ -109,6 +109,18 @@ The token decides which server a call is for. The MCP page picks separate Read a
    - **Named tunnel**: in the Cloudflare dashboard → Networking → Tunnels → Create a tunnel, choose Docker and copy the token from the command shown (don't run it). Set `COMPOSE_PROFILES=named-tunnel`, `TUNNEL_TOKEN` and `PUBLIC_URL=https://<hostname>`, then `docker compose up -d`. Once the tunnel shows as connected, open it → Routes → Add route → Published application, pick your hostname and set the service URL to `http://bridge:3000`.
 5. **Set up a server.** Open `PUBLIC_URL`, sign in with Discord, click **Add to Discord** for the server, then **Configure**: paste a Devin service user key (Devin → Settings → Service users) and the org ID. Give the service user's role **`UseDevinSessions`** (create sessions), **`ViewOrgSessions`** (follow them) and **`ManageOrgSessions`** (send messages, stop and sleep), plus **`ImpersonateOrgSessions`** and **`ViewOrgMembership`** if you map Discord members to Devin users. Only Discord Administrators can edit that mapping; each Devin user is checked to be in the org, and every change is audited. See [Devin API calls](#devin-api-calls). The key is checked with read-only API calls before it's saved and is never shown again.
 
+### Host admin page
+
+Put your Discord user ID in `ADMIN_USER_IDS` in `.env` (comma-separated for several; copy it in Discord with Developer Mode on → right-click your name → **Copy User ID**), restart the bridge and sign in: an **Admin** link appears in the header and opens `<PUBLIC_URL>/admin`. Everyone else gets a 404 there. The page reads straight from the database and the running process:
+
+- **Needs attention:** Discord disconnected, errors in the last hour, a failed or missing data cleanup, low disk space, a large database, free space a `VACUUM` would reclaim, a large write-ahead log, high memory, many active tasks (each is polled from Devin every interval), tasks active for over 7 days, and servers that removed the bot but still have a Devin key stored.
+- **Usage:** tasks started in the last 24 hours, 7 and 30 days, with distinct members and servers, the share that opened a PR, tasks per day, active tasks by status and audit-log actions.
+- **Servers:** how many servers have the bot, how many are connected to Devin and which features they use, and the most active servers.
+- **Database:** file, write-ahead log and free disk sizes, and rows and bytes per table.
+- **Host:** uptime, memory, Discord ping, the last cleanup and the last 24 hours of logged errors, grouped.
+
+Usage covers at most the 30 days that activity data is kept. Errors and uptime are held in memory and reset on restart.
+
 Run exactly one copy per bot token. Two copies would both relay every message.
 
 ### Deploying updates automatically

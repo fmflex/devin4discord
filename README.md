@@ -107,6 +107,17 @@ The token decides which server a call is for. The MCP page picks separate Read a
 
 Run exactly one copy per bot token. Two copies would both relay every message.
 
+### Deploying updates automatically
+
+To redeploy whenever something is merged to `main`, install the deploy timer once from the checkout on the host:
+
+```sh
+sudo sh deploy/install-auto-deploy.sh
+journalctl -u devin4discord-deploy -f
+```
+
+Every minute, [`deploy/auto-deploy.sh`](deploy/auto-deploy.sh) fetches `origin/main`. When there's a new commit and every GitHub Actions check on it has passed, it fast-forwards the checkout and runs `docker compose up -d --build`. A commit whose CI failed is skipped, and a commit whose CI is still running is retried on the next run. Nothing needs to reach the host from outside, and no secrets are involved. The checkout must stay on `main` with no local commits, so keep host settings in `.env` (including `COMPOSE_PROFILES`). Run the script by hand to deploy straight away. If the host shares an IP that hits GitHub's unauthenticated API limit, put `GITHUB_TOKEN=<read-only token>` in `/etc/devin4discord-deploy.env`.
+
 Without Docker, Node 24+ also works: `npm ci && npm start`, with the UI reached at `PUBLIC_URL` through your own reverse proxy or tunnel.
 
 ## Development

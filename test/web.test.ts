@@ -296,7 +296,7 @@ test('the Administrator row saves restrictions, keeps settings and reverts to th
 
   const all = new URLSearchParams([
     ['_csrf', csrf],
-    ...['start_tasks', 'reply', 'manage_tasks'].map((p): [string, string] => ['p_administrator', p])
+    ...['start_tasks', 'reply', 'manage_tasks', 'merge_prs'].map((p): [string, string] => ['p_administrator', p])
   ]);
   const reverted = await t.request(`/g/${G}/permissions`, {
     method: 'POST',
@@ -802,4 +802,30 @@ test('channel lists filter by name or category and a filtered save only changes 
   assert.equal(saved.headers.get('location'), `/g/${G}/mcp?saved=1&q=bug`);
   assert.deepEqual(t.guilds.mcpReadChannels(G), []);
   assert.deepEqual(t.guilds.mcpPostChannels(G), []);
+});
+
+test('the GitHub token is checked, stored encrypted, never shown and removable', async () => {
+  const t = setup();
+  const { session, csrf } = await signIn(t);
+  const token = 'github_pat_0123456789abcdefWXYZ';
+  t.responses.set('GET /user', { status: 401, body: { message: 'Bad credentials' } });
+  const rejected = await post(t, `/g/${G}/github`, session, { _csrf: csrf, github_token: token });
+  assert.equal(rejected.status, 400);
+  assert.match(await rejected.text(), /GitHub rejected this token/);
+  assert.equal(t.guilds.github(G), null);
+
+  t.responses.set('GET /user', { status: 200, body: { login: 'merge-bot' } });
+  assert.equal((await post(t, `/g/${G}/github`, session, { _csrf: csrf, github_token: token })).status, 302);
+  const saved = t.guilds.github(G)!;
+  assert.equal(saved.login, 'merge-bot');
+  assert.equal(saved.tokenHint, 'WXYZ');
+  assert.doesNotMatch(saved.tokenEncrypted, /github_pat/);
+  assert.equal(t.secrets.decrypt(saved.tokenEncrypted, G), token);
+  const page = await (await t.request(`/g/${G}/devin`, { headers: { cookie: session } })).text();
+  assert.match(page, /merge-bot/);
+  assert.doesNotMatch(page, /github_pat_0123/);
+  assert.equal(t.guilds.auditLog(G)[0].action, 'github.update');
+
+  assert.equal((await post(t, `/g/${G}/github/remove`, session, { _csrf: csrf })).status, 302);
+  assert.equal(t.guilds.github(G), null);
 });

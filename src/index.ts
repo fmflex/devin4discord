@@ -14,6 +14,7 @@ import {
   discordReader,
   wireDiscord
 } from './discord.ts';
+import { githubResolver } from './github.ts';
 import { GuildStore } from './guilds.ts';
 import { createMcpHandler } from './mcp.ts';
 import { PRUNE_INTERVAL_MS, pruneOldData } from './retention.ts';
@@ -36,7 +37,7 @@ const bridge = new Bridge({
   chat: discordChat(client),
   ignorePrefix: IGNORE_PREFIX
 });
-const bot = new Bot({ bridge, guilds, tasks, publicUrl: config.publicUrl });
+const bot = new Bot({ bridge, guilds, tasks, publicUrl: config.publicUrl, github: githubResolver(guilds, secrets) });
 
 wireDiscord(client, bot, tasks, new Watcher({ guilds, secrets }));
 

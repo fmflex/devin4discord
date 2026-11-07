@@ -148,6 +148,16 @@ export const MIGRATIONS: string[] = [
      include_threads integer not null default 0,
      include_bots integer not null default 0,
      updated_at integer not null
+   );`,
+  // 10: `/devin merge`: the Merge PRs permission and each server's GitHub token.
+  `alter table guild_roles add column merge_prs integer not null default 0;
+
+   create table guild_github (
+     guild_id text primary key references guilds (guild_id) on delete cascade,
+     token_encrypted text not null,
+     token_hint text not null,
+     login text not null,
+     updated_at integer not null
    );`
 ];
 

@@ -29,6 +29,17 @@ export type DevinSettings = {
   updatedAt: number;
 };
 
+/** The GitHub token `/devin merge` uses. */
+export type GithubSettings = {
+  /** AES-256-GCM ciphertext from `Secrets.encrypt`, bound to the guild ID. */
+  tokenEncrypted: string;
+  /** The token's last four characters, shown in the UI. */
+  tokenHint: string;
+  /** The GitHub account the token belongs to. */
+  login: string;
+  updatedAt: number;
+};
+
 /** Where MCP may read or post: the ticked lists, or anywhere the bot's own Discord permissions allow. */
 export type McpMode = 'custom' | 'bot';
 export type McpModes = { read: McpMode; post: McpMode };
@@ -74,6 +85,7 @@ type RoleRaw = {
   start_tasks: number;
   reply: number;
   manage_tasks: number;
+  merge_prs: number;
   settings: number;
   max_acu: number | null;
   tasks_per_day: number | null;
@@ -183,6 +195,34 @@ export class GuildStore {
     this.db.prepare('delete from guild_devin where guild_id = ?').run(guildId);
   }
 
+  github(guildId: string): GithubSettings | null {
+    const raw = this.db.prepare('select * from guild_github where guild_id = ?').get(guildId) as
+      | { token_encrypted: string; token_hint: string; login: string; updated_at: number }
+      | undefined;
+    return raw
+      ? { tokenEncrypted: raw.token_encrypted, tokenHint: raw.token_hint, login: raw.login, updatedAt: raw.updated_at }
+      : null;
+  }
+
+  saveGithub(guildId: string, github: Omit<GithubSettings, 'updatedAt'>) {
+    this.ensure(guildId);
+    this.db
+      .prepare(
+        `insert into guild_github (guild_id, token_encrypted, token_hint, login, updated_at)
+         values (?, ?, ?, ?, ?)
+         on conflict (guild_id) do update set
+           token_encrypted = excluded.token_encrypted,
+           token_hint = excluded.token_hint,
+           login = excluded.login,
+           updated_at = excluded.updated_at`
+      )
+      .run(guildId, github.tokenEncrypted, github.tokenHint, github.login, Date.now());
+  }
+
+  clearGithub(guildId: string) {
+    this.db.prepare('delete from guild_github where guild_id = ?').run(guildId);
+  }
+
   setInstructions(guildId: string, instructions: string) {
     this.ensure(guildId);
     this.db
@@ -209,8 +249,8 @@ export class GuildStore {
   setRoleRules(guildId: string, rules: RoleRule[]) {
     this.ensure(guildId);
     const insert = this.db.prepare(
-      `insert into guild_roles (guild_id, role_id, start_tasks, reply, manage_tasks, settings, max_acu, tasks_per_day, concurrent_tasks)
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `insert into guild_roles (guild_id, role_id, start_tasks, reply, manage_tasks, merge_prs, settings, max_acu, tasks_per_day, concurrent_tasks)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
     const has = (rule: RoleRule, permission: Permission) =>
       rule.permissions.includes(permission) ? 1 : 0;
@@ -225,6 +265,7 @@ export class GuildStore {
           has(rule, 'start_tasks'),
           has(rule, 'reply'),
           has(rule, 'manage_tasks'),
+          has(rule, 'merge_prs'),
           has(rule, 'settings'),
           limits.maxAcu,
           limits.tasksPerDay,

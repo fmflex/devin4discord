@@ -45,6 +45,7 @@ function setup() {
     }
   };
   const devin: DevinApi = {
+    async requestReview() {},
     async startTask(input) {
       started.push(input);
       const id = `task-${nextTask++}`;

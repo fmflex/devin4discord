@@ -1,10 +1,11 @@
-export const PERMISSIONS = ['start_tasks', 'reply', 'manage_tasks', 'settings'] as const;
+export const PERMISSIONS = ['start_tasks', 'reply', 'manage_tasks', 'merge_prs', 'settings'] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
 export const PERMISSION_LABELS: Record<Permission, string> = {
   start_tasks: 'Start tasks',
   reply: 'Reply in task threads',
   manage_tasks: 'Manage tasks',
+  merge_prs: 'Merge PRs',
   settings: 'Change settings'
 };
 

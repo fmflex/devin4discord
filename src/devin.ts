@@ -50,7 +50,14 @@ export type TaskUpdate = {
 /** What the bridge needs from Devin; tests pass fakes. */
 export type DevinApi = Pick<
   DevinClient,
-  'startTask' | 'sendMessage' | 'getUpdate' | 'terminate' | 'sleep' | 'unarchive' | 'downloadAttachment'
+  | 'startTask'
+  | 'sendMessage'
+  | 'getUpdate'
+  | 'terminate'
+  | 'sleep'
+  | 'unarchive'
+  | 'downloadAttachment'
+  | 'requestReview'
 >;
 
 export const DEFAULT_DEVIN_API_URL = 'https://api.devin.ai';
@@ -325,6 +332,11 @@ export class DevinClient {
   /** `POST .../sessions/{id}/unarchive`, after a reply wakes a session we put to sleep. */
   async unarchive(taskId: string) {
     await this.request(`/sessions/${encodeURIComponent(taskId)}/unarchive`, 'POST');
+  }
+
+  /** `POST /v3/organizations/{org}/pr-reviews`: starts a Devin Review of the PR's latest commit. */
+  async requestReview(prUrl: string) {
+    await this.request('/pr-reviews', 'POST', { pr_url: prUrl });
   }
 
   /**

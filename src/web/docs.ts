@@ -77,6 +77,8 @@ const SECTIONS: Section[] = [
           <tr><td><code>/devin list</code></td><td>Recent tasks, only from threads you can see.</td></tr>
           <tr><td><code>/devin stop</code></td><td>In a task thread: stop the task for good.</td></tr>
           <tr><td><code>/devin sleep</code></td><td>In a task thread: pause it until the next reply.</td></tr>
+          <tr><td><code>/devin merge pr:…</code></td><td>In a task thread: merge its PR once its checks pass. <code>pr</code> (a number or URL) picks another PR.</td></tr>
+          <tr><td><code>/devin review pr:…</code></td><td>In a task thread: get a Devin Review of its PR. <code>pr</code> picks another PR.</td></tr>
         </tbody>
       </table>`
   },
@@ -90,6 +92,7 @@ const SECTIONS: Section[] = [
           <tr><td>Start tasks</td><td>Use @Devin, 🤖, Send to Devin and <code>/devin start</code>, and reply in their own task threads.</td></tr>
           <tr><td>Reply to tasks</td><td>Have their messages in any task thread forwarded to Devin.</td></tr>
           <tr><td>Manage tasks</td><td>Stop, sleep and reply to any task.</td></tr>
+          <tr><td>Merge PRs</td><td>Merge pull requests with <code>/devin merge</code>.</td></tr>
           <tr><td>Change settings</td><td>Use this site for the server.</td></tr>
         </tbody>
       </table>

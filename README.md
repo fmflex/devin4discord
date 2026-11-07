@@ -17,6 +17,8 @@ Hand Discord messages to Devin and follow the work in a Discord thread. One host
 - **Give feedback:** type in the thread, images included. Messages from members allowed to reply are forwarded to Devin (marked 📨). Messages that start with `//` are not forwarded. Mentioning the bot in a task thread is a reply, not a new task. For busy threads, turn on **Only forward messages that @mention Devin** on the **Channels** page.
 - **Stop or sleep:** `@Devin stop` / `@Devin sleep` in the thread, the **Stop** / **Sleep** buttons on the bot's first message in the thread, or `/devin stop` / `/devin sleep`. Stop ends the Devin session for good and the thread stops syncing. Sleep pauses it; the next forwarded reply wakes Devin. The bot posts who did it in the thread and writes it to the audit log. Members who aren't allowed get a private "you can't do that".
 - **Overview:** `/devin status` inside a thread, `/devin list` anywhere (only tasks in threads you can see).
+- **Merge:** `/devin merge` in a task thread merges its pull request (the newest open one) once all its checks have passed, with the repo's merge method. For another PR, pass `pr:42` (same repo as the thread's PR, or the only default repo) or a full PR URL. The bot merges with the GitHub token saved on the **Devin** page, so Devin itself needs no merge rights; branch protection still applies. Needs **Merge PRs**.
+- **Review:** `/devin review` in a task thread starts a Devin Review of its newest pull request; `pr:` picks another one the same way. Findings show up on the PR. Needs Start tasks or Manage tasks.
 
 ## Who can do what
 
@@ -27,6 +29,7 @@ Access is set per server by Discord role on the **Permissions** page:
 | Start tasks | `@Devin`, 🤖, **Send to Devin**, `/devin start`; replying in your own task threads |
 | Reply to tasks | Messages in any task thread are forwarded to Devin |
 | Manage tasks | Stop and sleep any task, and reply to any task |
+| Merge PRs | `/devin merge` |
 | Change settings | Use the setup UI for this server |
 
 The member who started a task can always stop it or put it to sleep. Members with **Administrator** can do everything with no limits until you change the **Administrator** row on the Permissions page; they always keep Change settings, and **Manage Server** can always change settings. Only Discord Administrators can change the Devin connection, role permissions and MCP settings; other members with Change settings can view them and, on the Channels page, change only channels they can view in Discord. Each role can also cap ACUs per task, tasks per user per day and concurrent tasks; a member with several roles gets the most generous limit. The **Channels** page limits where tasks can start and picks the channel task threads open in. A task started inside a private thread always gets its own private thread in the same channel, with only the member who started it added, instead of going to that channel.
@@ -140,6 +143,7 @@ Every call uses the server's service user key against the [Devin API v3](https:/
 | Reply (also wakes a sleeping session) | [`POST …/sessions/{id}/messages`](https://docs.devin.ai/api-reference/v3/sessions/post-organizations-sessions-messages) | `ManageOrgSessions` |
 | Stop | [`DELETE …/sessions/{id}`](https://docs.devin.ai/api-reference/v3/sessions/delete-organizations-sessions) | Its creator, or `ManageOrgSessions` |
 | Sleep | [`POST …/sessions/{id}/archive`](https://docs.devin.ai/api-reference/v3/sessions/post-organizations-sessions-archive) | `ManageOrgSessions` |
+| Devin Review (`/devin review`) | `POST /v3/organizations/{org}/pr-reviews` | Not listed in the docs |
 | Wake after sleep | [`POST …/sessions/{id}/unarchive`](https://docs.devin.ai/api-reference/v3/sessions/post-organizations-sessions-unarchive), after the reply | `ManageOrgSessions` |
 
 v3 has no sleep-only call. Archive is documented as "archive session and put it to sleep if currently running", and a message to a sleeping archived session resumes it, so Sleep archives the session and the next reply unarchives it. A stopped session can't be resumed. Sessions created for a mapped Devin user aren't created by the service user, so stopping them also needs `ManageOrgSessions`.

@@ -4,6 +4,7 @@ import { deleteCookie, getSignedCookie, setSignedCookie } from 'hono/cookie';
 import { secureHeaders } from 'hono/secure-headers';
 import { randomToken, safeEqual, type Secrets } from '../crypto.ts';
 import { DEVIN_USER_ID, verifyDevinCredentials, verifyDevinOrgUser } from '../devin.ts';
+import { verifyGithubToken } from '../github.ts';
 import { MAX_BODY_BYTES as MAX_MCP_BODY_BYTES, newMcpToken } from '../mcp.ts';
 import type { Directory } from '../directory.ts';
 import { DEFAULT_CONTEXT_MESSAGES, MAX_CONTEXT_MESSAGES, type Actor, type GuildStore, type McpMode } from '../guilds.ts';
@@ -422,8 +423,14 @@ export function createWebApp(deps: WebDeps) {
       userMap: Object.entries(devin?.userMap ?? {})
         .map(([discordId, devinId]) => `${discordId} ${devinId}`)
         .join('\n'),
-      instructions: deps.guilds.settings(guildId)?.instructions ?? ''
+      instructions: deps.guilds.settings(guildId)?.instructions ?? '',
+      github: githubForm(guildId)
     };
+  }
+
+  function githubForm(guildId: string) {
+    const github = deps.guilds.github(guildId);
+    return github ? { hint: github.tokenHint, login: github.login } : null;
   }
 
   app.get('/g/:guildId/devin', (c) => {
@@ -442,7 +449,8 @@ export function createWebApp(deps: WebDeps) {
       orgId,
       repos: field(form, 'repos'),
       userMap: field(form, 'user_map'),
-      instructions: field(form, 'instructions')
+      instructions: field(form, 'instructions'),
+      github: githubForm(guild.id)
     };
     const fail = (text: string) => c.html(devinPage(session, guild, submitted, { kind: 'error', text }, true), 400);
     try {
@@ -482,6 +490,36 @@ export function createWebApp(deps: WebDeps) {
       if (mapChanges.length) deps.guilds.audit(guild.id, actor, 'devin.user_map', mapChanges.join('; '));
     } catch (error) {
       return fail(error instanceof Error ? error.message : String(error));
+    }
+    return c.redirect(`/g/${guild.id}/devin?saved=1`);
+  });
+
+  app.post('/g/:guildId/github', adminOnly, async (c) => {
+    const { session, guild, actor } = ctx(c);
+    const form = (await c.req.parseBody({ all: true })) as Form;
+    const token = field(form, 'github_token');
+    const fail = (text: string) =>
+      c.html(devinPage(session, guild, devinForm(guild.id), { kind: 'error', text }, true), 400);
+    if (!/^[\w-]{20,255}$/.test(token)) return fail('Enter a GitHub token, like github_pat_….');
+    try {
+      const { login } = await verifyGithubToken(token, fetchImpl);
+      deps.guilds.saveGithub(guild.id, {
+        tokenEncrypted: deps.secrets.encrypt(token, guild.id),
+        tokenHint: token.slice(-4),
+        login
+      });
+      deps.guilds.audit(guild.id, actor, 'github.update', `token ending …${token.slice(-4)} (${login})`);
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error));
+    }
+    return c.redirect(`/g/${guild.id}/devin?saved=1`);
+  });
+
+  app.post('/g/:guildId/github/remove', adminOnly, (c) => {
+    const { guild, actor } = ctx(c);
+    if (deps.guilds.github(guild.id)) {
+      deps.guilds.clearGithub(guild.id);
+      deps.guilds.audit(guild.id, actor, 'github.remove', 'GitHub token removed');
     }
     return c.redirect(`/g/${guild.id}/devin?saved=1`);
   });

@@ -272,6 +272,8 @@ export type DevinForm = {
   repos: string;
   userMap: string;
   instructions: string;
+  /** The saved GitHub token for `/devin merge`, if any. */
+  github: { hint: string; login: string } | null;
 };
 
 export function devinPage(
@@ -327,6 +329,29 @@ export function devinPage(
       </label>
       <button class="button">Check and save</button>`)}
     </form>
+    <form class="card" method="post" action="/g/${guild.id}/github">
+      ${csrfField(session)}
+      <h2>GitHub <span class="optional">Optional</span></h2>
+      <p class="muted">Lets <code>/devin merge</code> merge pull requests. The bot merges with this token, so Devin itself never needs merge rights. It only merges open PRs whose checks all passed.</p>
+      ${canEdit ? '' : ADMIN_ONLY_NOTE}
+      ${editable(canEdit, html`
+      <label>GitHub token ${help('the GitHub token', html`<p>A fine-grained personal access token (or a bot account's) with <strong>Contents: Read and write</strong>, <strong>Pull requests: Read and write</strong> and <strong>Commit statuses: Read</strong> on the repos you want to merge in. Classic tokens need the <code>repo</code> scope.</p>
+        <p>Branch protection still applies: GitHub refuses merges its rules don't allow.</p>
+        <p>It's checked with <code>GET /user</code> before saving and stored encrypted.</p>`)}
+        <input type="password" name="github_token" autocomplete="off" spellcheck="false"
+          placeholder="${form.github ? `Set, ends in …${form.github.hint}. Paste a new one to replace it.` : 'github_pat_…'}">
+      </label>
+      <p class="muted small">${form.github ? html`Token for <strong>${form.github.login}</strong> is <strong>set, ends in …${form.github.hint}</strong>. It is stored encrypted and never shown again.` : 'No token saved: /devin merge is off.'}</p>
+      <button class="button">Check and save</button>`)}
+    </form>
+    ${form.github && canEdit
+      ? html`<form class="card danger" method="post" action="/g/${guild.id}/github/remove">
+          ${csrfField(session)}
+          <h2>Remove GitHub token</h2>
+          <p class="muted">Turns off <code>/devin merge</code> until a new token is saved.</p>
+          <button class="button danger">Remove token</button>
+        </form>`
+      : ''}
     ${form.keyHint && canEdit
       ? html`<form class="card danger" method="post" action="/g/${guild.id}/devin/remove">
           ${csrfField(session)}
@@ -342,6 +367,7 @@ const PERMISSION_HELP: Record<(typeof PERMISSIONS)[number], Html> = {
   start_tasks: html`<p>Start a task with <strong>@Devin</strong>, the robot reaction, <strong>Send to Devin</strong> or <code>/devin start</code>, and reply in their own task threads.</p><p>Only works in the allowed channels (see Channels).</p>`,
   reply: html`<p>Messages they post in any task thread are forwarded to Devin.</p><p>Messages starting with <code>//</code> are never forwarded.</p>`,
   manage_tasks: html`<p>Stop or put to sleep any task: the Stop / Sleep buttons, <code>@Devin stop</code> / <code>@Devin sleep</code> or <code>/devin stop</code> / <code>/devin sleep</code>. Also lets them reply to any task.</p><p>The member who started a task can always stop or sleep it.</p>`,
+  merge_prs: html`<p>Merge pull requests with <code>/devin merge</code>, using the GitHub token on the Devin page.</p><p>Only open PRs whose checks all passed are merged.</p>`,
   settings: html`<p>Use this setup site for the server. Members with Administrator or Manage Server always can.</p><p>Only Discord Administrators can change the Devin connection, these permissions and the MCP settings. Others can view them and change channels they can see themselves.</p>`
 };
 

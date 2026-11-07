@@ -186,6 +186,22 @@ export function commandDefinitions() {
     .addSubcommand((sub) => sub.setName('stop').setDescription("Stop this thread's task for good"))
     .addSubcommand((sub) =>
       sub.setName('sleep').setDescription("Put this thread's task to sleep; a reply wakes it")
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('merge')
+        .setDescription("Merge this thread's pull request once its checks pass")
+        .addStringOption((option) =>
+          option.setName('pr').setDescription('Another PR: its number (same repo) or URL').setMaxLength(200)
+        )
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('review')
+        .setDescription("Get a Devin Review of this thread's pull request")
+        .addStringOption((option) =>
+          option.setName('pr').setDescription('Another PR: its number (same repo) or URL').setMaxLength(200)
+        )
     );
   const contextMenu = new ContextMenuCommandBuilder()
     .setName('Send to Devin')
@@ -493,6 +509,10 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore, watcher?
       );
     }
     if (sub === 'status') return bot.status(interaction.guildId, member, interaction.channelId);
+    if (sub === 'merge' || sub === 'review') {
+      const pr = interaction.options.getString('pr');
+      return bot[sub](interaction.guildId, member, interaction.channelId, pr);
+    }
     if (sub === 'stop' || sub === 'sleep') {
       return bot.controlThread(sub, interaction.guildId, member, interaction.channelId);
     }

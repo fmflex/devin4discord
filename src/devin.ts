@@ -92,6 +92,31 @@ const ATTACHMENT_PATH = /\/attachments\/([\w-]{1,100})\/([^/?#]{1,255})$/;
 /** Lines like `[OFFER_TEST_APP]Test the app[/OFFER_TEST_APP]`: UI controls for Devin's own webapp, not text. */
 const CONTROL_LINE = /^[ \t]*\[([A-Z][A-Z0-9_]{2,40})\][^\n]*\[\/\1\][ \t]*$/gm;
 
+/** Reads a body, stopping as soon as it passes `max` bytes, so a missing or wrong Content-Length can't fill memory. */
+export async function readCapped(response: Response, max: number, name: string): Promise<Uint8Array<ArrayBuffer>> {
+  const reader = response.body?.getReader();
+  if (!reader) return new Uint8Array(0);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => {});
+      throw new Error(`${name} is too large to copy to Devin.`);
+    }
+    chunks.push(value);
+  }
+  const data = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    data.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return data;
+}
+
 /**
  * Splits the `ATTACHMENT:{"url": …}` lines Devin appends for attached files out of a
  * message, and drops control-marker lines meant for Devin's webapp. Lines that don't hold
@@ -350,8 +375,7 @@ export class DevinClient {
     if (Number(download.headers.get('content-length')) > MAX_UPLOAD_BYTES) {
       throw new Error(`${file.filename} is too large to copy to Devin.`);
     }
-    const data = await download.arrayBuffer();
-    if (data.byteLength > MAX_UPLOAD_BYTES) throw new Error(`${file.filename} is too large to copy to Devin.`);
+    const data = await readCapped(download, MAX_UPLOAD_BYTES, file.filename);
     const form = new FormData();
     const type = download.headers.get('content-type') ?? 'application/octet-stream';
     form.append('file', new Blob([data], { type }), file.filename);

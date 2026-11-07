@@ -4,6 +4,7 @@ import { deleteCookie, getSignedCookie, setSignedCookie } from 'hono/cookie';
 import { secureHeaders } from 'hono/secure-headers';
 import { randomToken, safeEqual, type Secrets } from '../crypto.ts';
 import { DEVIN_USER_ID, verifyDevinCredentials, verifyDevinOrgUser } from '../devin.ts';
+import type { AdminStats } from '../admin.ts';
 import { verifyGithubToken } from '../github.ts';
 import { MAX_BODY_BYTES as MAX_MCP_BODY_BYTES, newMcpToken } from '../mcp.ts';
 import type { Directory } from '../directory.ts';
@@ -34,6 +35,7 @@ import { SESSION_TTL_MS, type SessionStore, type WebSession } from './sessions.t
 import { MAX_WEBHOOK_SECRET, webhookUrl } from '../webhooks.ts';
 import {
   CSS,
+  adminPage,
   auditPage,
   channelsPage,
   devinPage,
@@ -80,6 +82,8 @@ export type WebDeps = {
   fetch?: typeof fetch;
   /** The per-server MCP endpoint served at `/mcp`; see `createMcpHandler`. */
   mcp?: (request: Request) => Promise<Response>;
+  /** The host admin page at `/admin`, for the Discord users in `userIds` only. */
+  admin?: { userIds: string[]; stats: () => AdminStats };
   /** Development only: `/auth/dev` signs in as this identity without Discord. */
   devLogin?: DiscordIdentity;
 };
@@ -179,6 +183,7 @@ export function createWebApp(deps: WebDeps) {
   const fetchImpl = deps.fetch ?? fetch;
   const redirectUri = `${deps.publicUrl}/auth/callback`;
   const secret = deps.secrets.cookieSecret;
+  const isHostAdmin = (session: WebSession | null) => Boolean(session && deps.admin?.userIds.includes(session.userId));
 
   app.use(
     secureHeaders({
@@ -374,7 +379,16 @@ export function createWebApp(deps: WebDeps) {
       }
     }
     rows.sort((a, b) => (a.action === b.action ? a.name.localeCompare(b.name) : a.action === 'configure' ? -1 : 1));
-    return c.html(pickerPage(session, rows, '/auth/invite'));
+    return c.html(pickerPage(session, rows, '/auth/invite', isHostAdmin(session)));
+  });
+
+  // Host-wide stats across every server; anyone not on ADMIN_USER_IDS gets the same 404 as a missing page.
+  app.get('/admin', (c) => {
+    const session = c.get('session');
+    if (!session) return c.redirect('/');
+    if (!deps.admin || !isHostAdmin(session)) return c.html(errorPage(session, 'Not found', 'There is no page here.'), 404);
+    c.header('Cache-Control', 'no-store');
+    return c.html(adminPage(session, deps.admin.stats()));
   });
 
   // Every /g/:guildId page: signed in, bot in the server, and the bot confirms the user may configure it.

@@ -4,6 +4,7 @@ import type { ChannelInfo, RoleInfo } from '../directory.ts';
 import { DEFAULT_INSTRUCTIONS } from '../format.ts';
 import { MAX_CONTEXT_MESSAGES, type AuditEntry, type McpModes, type WatchChannel } from '../guilds.ts';
 import { RETENTION_DAYS } from '../retention.ts';
+import type { AdminStats } from '../admin.ts';
 
 export type MentionSettings = { contextMessages: number; mentionOnlyReplies: boolean };
 import { ADMIN_ROLE, PERMISSIONS, PERMISSION_LABELS, adminRule, type Limits, type RoleRule } from '../permissions.ts';
@@ -20,6 +21,8 @@ export type PageOptions = {
   notice?: { kind: 'ok' | 'error'; text: string } | null;
   /** Link-preview tags for public pages; `url` is the absolute page URL. */
   meta?: { description: string; url: string; image: string };
+  /** Show the host admin link in the header (only for users on ADMIN_USER_IDS). */
+  admin?: boolean;
   body: Html | Html[];
 };
 
@@ -102,7 +105,7 @@ ${page.meta
     <a class="navlink navdiscord" href="${COMMUNITY_URL}" target="_blank" rel="noopener noreferrer" aria-label="Join our Discord community">${DISCORD_LOGO}<span>Community</span></a>
     <a class="navlink" href="/docs">Docs</a>
     ${session
-      ? html`<a class="navlink" href="/">Servers</a>
+      ? html`${page.admin ? html`<a class="navlink" href="/admin">Admin</a>` : ''}<a class="navlink" href="/">Servers</a>
         <span class="user">${avatar ? html`<img class="avatar" src="${avatar}" alt="">` : html`<span class="avatar blank">${session.username.slice(0, 1)}</span>`}<span class="username">${session.username}</span></span>
         <form method="post" action="/auth/logout">${csrfField(session)}<button class="button ghost small">Sign out</button></form>`
       : html`<a class="button small" href="/auth/login">Sign in</a>`}
@@ -239,7 +242,7 @@ export type PickerRow = {
   inviteUrl: string;
 };
 
-export function pickerPage(session: WebSession, rows: PickerRow[], inviteAny: string) {
+export function pickerPage(session: WebSession, rows: PickerRow[], inviteAny: string, admin = false) {
   const icon = (row: PickerRow) =>
     row.icon
       ? html`<img class="icon" src="https://cdn.discordapp.com/icons/${row.id}/${row.icon}.png?size=64" alt="">`
@@ -247,6 +250,7 @@ export function pickerPage(session: WebSession, rows: PickerRow[], inviteAny: st
   return layout({
     title: 'Servers',
     session,
+    admin,
     body: html`<section class="card">
       <div class="row between"><div><h1>Your servers</h1><p class="muted small">Servers where you can set up devin4discord.</p></div><a class="button secondary" href="${inviteAny}">Add to another server</a></div>
       ${rows.length
@@ -795,6 +799,144 @@ export function auditPage(
   });
 }
 
+const MB = 1024 * 1024;
+
+function size(bytes: number | null) {
+  if (bytes === null) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < MB) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * MB) return `${(bytes / MB).toFixed(1)} MB`;
+  return `${(bytes / 1024 / MB).toFixed(2)} GB`;
+}
+
+function duration(ms: number) {
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours} h ${minutes % 60} min`;
+  return `${Math.floor(hours / 24)} days ${hours % 24} h`;
+}
+
+function ago(at: number | null, now: number) {
+  return at === null ? '—' : `${duration(Math.max(0, now - at))} ago`;
+}
+
+function utc(at: number) {
+  return new Date(at).toISOString().replace('T', ' ').slice(0, 19);
+}
+
+function plural(n: number, one: string, many = `${one}s`) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+function stat(label: string, value: string | number, note?: string) {
+  return html`<div class="stat"><span class="stat-v">${value}</span><span class="stat-l">${label}</span>${note ? html`<span class="stat-n">${note}</span>` : ''}</div>`;
+}
+
+export function adminPage(session: WebSession, stats: AdminStats) {
+  const { servers, tasks, database: db, host, web, now } = { ...stats, now: stats.generatedAt };
+  const busiest = Math.max(0, ...stats.daily.map((d) => d.tasks));
+  const peak = Math.max(1, busiest);
+  const pct = (part: number, whole: number) => (whole ? `${Math.round((100 * part) / whole)}%` : '—');
+  return layout({
+    title: 'Admin',
+    session,
+    admin: true,
+    body: html`<div class="guildhead"><a class="crumbs" href="/">← All servers</a><h1>Host admin</h1></div>
+    <p class="muted small">Live from this host's database at ${utc(now)} UTC. Tasks and audit entries are kept ${stats.retentionDays} days, so usage covers the last ${stats.retentionDays} days at most. Errors and uptime reset when the bot restarts. <a href="/admin">Refresh</a></p>
+
+    <section class="card">
+      <h2>Needs attention</h2>
+      ${stats.warnings.length
+        ? html`<ul class="warnings">${stats.warnings.map((w) => html`<li class="${w.level}">${w.text}</li>`)}</ul>`
+        : html`<p class="pill ok">All good</p>`}
+    </section>
+
+    <section class="card">
+      <h2>Usage</h2>
+      <div class="stats">
+        ${stat('tasks, last 24 h', tasks.last24h)}
+        ${stat('tasks, last 7 days', tasks.last7d, `${plural(tasks.users7d, 'member')} · ${plural(tasks.servers7d, 'server')}`)}
+        ${stat(`tasks, last ${stats.retentionDays} days`, tasks.last30d, `${plural(tasks.users30d, 'member')} · ${plural(tasks.servers30d, 'server')}`)}
+        ${stat('opened a PR', pct(tasks.withPr30d, tasks.last30d), `${tasks.withPr30d} of ${tasks.last30d} tasks`)}
+        ${stat('active now', tasks.active, `${tasks.sleeping} sleeping`)}
+      </div>
+      <h3>Tasks per day (UTC)</h3>
+      <div class="bars" role="img" aria-label="Tasks started per day over the last 30 days">${stats.daily.map(
+        (d) => html`<div class="bar" title="${d.day}: ${d.tasks} tasks by ${d.users} members"><span style="height:${Math.round((100 * d.tasks) / peak)}%"></span></div>`
+      )}</div>
+      <div class="row between muted small"><span>${stats.daily[0]?.day ?? ''}</span><span>busiest day: ${busiest} tasks</span><span>${stats.daily.at(-1)?.day ?? ''}</span></div>
+      ${tasks.states.length
+        ? html`<h3>Active tasks by status</h3><p>${tasks.states.map((s) => html`<span class="pill">${s.label} · ${s.count}</span> `)}</p>`
+        : ''}
+      <h3>Actions, last ${stats.retentionDays} days</h3>
+      ${stats.actions.length
+        ? html`<div class="scroll"><table class="grid"><thead><tr><th>Action</th><th>Count</th></tr></thead><tbody>${stats.actions.map(
+            (a) => html`<tr><td><code>${a.action}</code></td><td>${a.count}</td></tr>`
+          )}</tbody></table></div>`
+        : html`<p class="muted">Nothing in the audit log yet.</p>`}
+    </section>
+
+    <section class="card wide">
+      <h2>Servers</h2>
+      <div class="stats">
+        ${stat('servers with the bot', servers.botIn ?? '—', servers.members === null ? 'Discord not connected' : `${servers.members} members in total`)}
+        ${stat('connected to Devin', servers.configured, servers.notConfigured === null ? undefined : `${servers.notConfigured} not set up yet`)}
+        ${stat('GitHub token', servers.github)}
+        ${stat('MCP token', servers.mcp)}
+        ${stat('webhook', servers.webhook)}
+        ${stat('watched channels', servers.watched)}
+        ${stat('Devin user mapping', servers.userMaps)}
+      </div>
+      <h3>Most active servers, last ${stats.retentionDays} days</h3>
+      ${stats.topServers.length
+        ? html`<div class="scroll"><table class="grid"><thead><tr><th>Server</th><th>Tasks</th><th>Members using it</th><th>Active</th><th>Last task</th><th>Status</th></tr></thead><tbody>${stats.topServers.map(
+            (g) => html`<tr>
+              <td>${g.name} <span class="muted small">${g.guildId}</span>${g.memberCount === null ? '' : html`<br><span class="muted small">${g.memberCount} members</span>`}</td>
+              <td>${g.tasks30d}</td><td>${g.users30d}</td><td>${g.active}</td>
+              <td class="nowrap">${ago(g.lastTaskAt, now)}</td>
+              <td>${g.inDiscord === false ? html`<span class="pill warn">Bot removed</span>` : g.configured ? html`<span class="pill ok">Set up</span>` : html`<span class="pill warn">No Devin key</span>`}</td>
+            </tr>`
+          )}</tbody></table></div>`
+        : html`<p class="muted">No tasks yet.</p>`}
+      <p class="muted small">${plural(web.signedInUsers, 'person', 'people')} signed in to the setup UI (${plural(web.activeSessions, 'session')}), ${web.signedInUsers7d} of them signed in during the last 7 days.</p>
+    </section>
+
+    <section class="card wide">
+      <h2>Database</h2>
+      <div class="stats">
+        ${stat('file', size(db.fileBytes), `${size(db.usedBytes)} used · ${size(db.freeBytes)} free`)}
+        ${stat('write-ahead log', size(db.walBytes))}
+        ${stat('disk free', size(db.diskFreeBytes), db.diskTotalBytes ? `of ${size(db.diskTotalBytes)}` : undefined)}
+        ${stat('schema', `v${db.schemaVersion}`)}
+      </div>
+      <p class="muted small"><code>${db.path}</code></p>
+      <div class="scroll"><table class="grid"><thead><tr><th>Table</th><th>Rows</th><th>Size (with indexes)</th></tr></thead><tbody>${db.tables.map(
+        (t) => html`<tr><td><code>${t.name}</code></td><td>${t.rows}</td><td>${size(t.bytes)}</td></tr>`
+      )}</tbody></table></div>
+    </section>
+
+    <section class="card wide">
+      <h2>Host</h2>
+      <div class="stats">
+        ${stat('Discord', host.discordReady ? 'online' : 'offline', host.discordPingMs === null ? undefined : `${host.discordPingMs} ms ping`)}
+        ${stat('uptime', duration(host.uptimeMs))}
+        ${stat('memory', size(host.rssBytes), `${size(host.heapUsedBytes)} heap`)}
+        ${stat('Node', host.node)}
+        ${stat('last cleanup', host.lastPrune ? ago(host.lastPrune.at, now) : 'not yet', host.lastPrune ? (host.lastPrune.error ? 'failed' : `${host.lastPrune.removed} rows removed`) : undefined)}
+        ${stat('errors', host.errors24h, `${host.errors1h} in the last hour`)}
+      </div>
+      <h3>Errors, last 24 hours</h3>
+      ${host.topErrors.length
+        ? html`<div class="scroll"><table class="grid audit"><thead><tr><th>Count</th><th>Last (UTC)</th><th>Message</th></tr></thead><tbody>${host.topErrors.map(
+            (e) => html`<tr><td>${e.count}</td><td class="nowrap">${utc(e.lastAt)}</td><td class="detail"><code>${e.text}</code></td></tr>`
+          )}</tbody></table></div>
+          <p class="muted small">Similar messages are grouped. Full details are in <code>docker compose logs bridge</code>.</p>`
+        : html`<p class="muted">None.</p>`}
+    </section>`
+  });
+}
+
 export function errorPage(session: WebSession | null, title: string, text: string) {
   return layout({
     title,
@@ -938,6 +1080,13 @@ form:has(.only-ticked:checked) tbody:not(:has(input[name]:checked)){display:none
 .grid.audit td{vertical-align:top}.grid.audit td.detail{overflow-wrap:anywhere}
 .steps{padding-left:22px;margin:8px 0}.steps li{margin:6px 0}.steps li::marker{color:var(--muted)}
 code.token{display:inline-block;margin-top:8px;padding:6px 10px;word-break:break-all;user-select:all;font-size:14px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:16px 0}
+.stat{display:flex;flex-direction:column;gap:2px;padding:14px 16px;background:var(--card-2);border:1px solid var(--line);border-radius:10px}
+.stat-v{font-size:24px;font-weight:800;color:#fff;line-height:1.2;overflow-wrap:break-word}.stat-l{font-size:13px;color:var(--muted)}.stat-n{font-size:12px;color:var(--muted)}
+.bars{display:flex;align-items:flex-end;gap:3px;height:120px;padding:8px 0;border-bottom:1px solid var(--line-2)}
+.bar{flex:1;height:100%;display:flex;align-items:flex-end}.bar span{display:block;width:100%;min-height:2px;border-radius:3px 3px 0 0;background:linear-gradient(var(--accent-2),var(--accent))}
+.warnings{list-style:none;padding:0;margin:12px 0 0;display:flex;flex-direction:column;gap:8px}
+.warnings li{padding:10px 14px;border-radius:8px;border:1px solid}.warnings li.warn{background:rgba(240,178,50,.08);border-color:rgba(240,178,50,.35)}.warnings li.bad{background:rgba(237,66,69,.1);border-color:rgba(237,66,69,.4)}
 .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:10px}
 @media (max-width:860px){.hero{grid-template-columns:1fr;gap:32px;margin-top:8px}.docs{grid-template-columns:1fr}.toc{position:static;flex-flow:row wrap}}
 @media (max-width:600px){main{padding:20px 14px}.top-in{padding:10px 14px}.card{padding:18px}.username,.me .navlink[href="/"],.navlink.navdiscord span{display:none}.user{margin:0 2px;padding-left:8px}.thread{margin-left:16px}.row.between{flex-wrap:wrap}}

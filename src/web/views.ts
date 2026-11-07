@@ -899,7 +899,7 @@ export function adminPage(session: WebSession, stats: AdminStats) {
             </tr>`
           )}</tbody></table></div>`
         : html`<p class="muted">No tasks yet.</p>`}
-      <p class="muted small">${plural(web.signedInUsers, 'person', 'people')} signed in to the setup UI (${plural(web.activeSessions, 'session')}), ${plural(web.signIns7d, 'sign-in')} in the last 7 days.</p>
+      <p class="muted small">${plural(web.signedInUsers, 'person', 'people')} signed in to the setup UI (${plural(web.activeSessions, 'session')}), ${web.signedInUsers7d} of them signed in during the last 7 days.</p>
     </section>
 
     <section class="card wide">

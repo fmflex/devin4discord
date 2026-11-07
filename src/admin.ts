@@ -67,7 +67,7 @@ export type AdminStats = {
   daily: { day: string; tasks: number; users: number }[];
   actions: { action: string; count: number }[];
   topServers: ServerUsage[];
-  web: { activeSessions: number; signedInUsers: number; signIns7d: number };
+  web: { activeSessions: number; signedInUsers: number; signedInUsers7d: number };
   database: {
     path: string;
     fileBytes: number;
@@ -248,7 +248,12 @@ export function collectAdminStats(deps: {
   const web: AdminStats['web'] = {
     activeSessions: count(db, 'select count(*) as n from web_sessions where expires_at > ?', now),
     signedInUsers: count(db, 'select count(distinct user_id) as n from web_sessions where expires_at > ?', now),
-    signIns7d: count(db, 'select count(*) as n from web_sessions where created_at >= ?', since7d)
+    signedInUsers7d: count(
+      db,
+      'select count(distinct user_id) as n from web_sessions where expires_at > ? and created_at >= ?',
+      now,
+      since7d
+    )
   };
 
   const pageSize = count(db, 'select page_size as n from pragma_page_size');

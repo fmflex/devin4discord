@@ -44,6 +44,7 @@ function setup() {
       });
     }
   };
+  const linkSessions = new Map<string, { userId: string; sessionId: string; url: string }>();
   const devin: DevinApi = {
     async startTask(input) {
       started.push(input);
@@ -58,6 +59,9 @@ function setup() {
     },
     async sleep(taskId) {
       controls.push(`sleep ${taskId}`);
+    },
+    async findLinkSession(code) {
+      return linkSessions.get(code) ?? null;
     },
     async unarchive(taskId) {
       controls.push(`unarchive ${taskId}`);

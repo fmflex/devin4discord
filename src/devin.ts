@@ -57,7 +57,7 @@ export type TaskUpdate = {
 /** What the bridge needs from Devin; tests pass fakes. */
 export type DevinApi = Pick<
   DevinClient,
-  'startTask' | 'sendMessage' | 'getUpdate' | 'terminate' | 'sleep' | 'unarchive' | 'downloadAttachment'
+  'startTask' | 'sendMessage' | 'getUpdate' | 'terminate' | 'sleep' | 'unarchive' | 'downloadAttachment' | 'findLinkSession'
 >;
 
 export const DEFAULT_DEVIN_API_URL = 'https://api.devin.ai';
@@ -436,6 +436,32 @@ export class DevinClient {
     const data = new Uint8Array(await response.arrayBuffer());
     if (data.byteLength > MAX_ATTACHMENT_BYTES) throw new Error(`Attachment ${file.name} is too large to upload.`);
     return { name: file.name, data };
+  }
+
+  /**
+   * Who proved they own a Devin account: a session they started in the Devin web app after `since`
+   * (ms) whose first message holds `code`. Sessions made through the API, by service users or
+   * impersonation don't count, and only the first message does, so nobody can add the code to
+   * someone else's session.
+   */
+  async findLinkSession(code: string, since: number): Promise<{ userId: string; sessionId: string; url: string } | null> {
+    const params = new URLSearchParams({
+      first: '50',
+      created_after: String(Math.floor(since / 1000) - 60),
+      origins: 'webapp'
+    });
+    const list = await this.request<{
+      items: { session_id: string; url: string; user_id?: string | null; service_user_id?: string | null; origin?: string | null }[];
+    }>(`/sessions?${params}`);
+    for (const session of list.items) {
+      if (!session.user_id || session.service_user_id || session.origin !== 'webapp') continue;
+      const page = await this.request<{ items: DevinMessage[] }>(
+        `/sessions/${encodeURIComponent(session.session_id)}/messages?first=5`
+      );
+      const first = page.items.find((message) => message.source === 'user');
+      if (first?.message.includes(code)) return { userId: session.user_id, sessionId: session.session_id, url: session.url };
+    }
+    return null;
   }
 
   private async listMessages(sessionId: string) {

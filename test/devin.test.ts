@@ -111,6 +111,30 @@ test('readCapped stops reading once a body passes the cap, whatever Content-Leng
   assert.deepEqual([...(await readCapped(new Response('abc'), 4096, 'small.txt'))], [97, 98, 99]);
 });
 
+test('findLinkSession only accepts the code in the first message of a web app session started by a user', async () => {
+  const sessions = {
+    items: [
+      { session_id: 'devin-api', url: 'a', user_id: 'user-victim', service_user_id: 'su-1', origin: 'webapp' },
+      { session_id: 'devin-slack', url: 'b', user_id: 'user-x', origin: 'slack' },
+      { session_id: 'devin-later', url: 'c', user_id: 'user-victim', origin: 'webapp' },
+      { session_id: 'devin-own', url: 'https://app.devin.ai/sessions/own', user_id: 'user-me', origin: 'webapp' }
+    ]
+  };
+  const message = (text: string) => ({ items: [{ event_id: 'e', source: 'user', message: text }] });
+  const { calls, impl } = fakeFetch({
+    [`GET ${base}/sessions`]: sessions,
+    [`GET ${base}/sessions/devin-api/messages`]: message('D4D-1'),
+    [`GET ${base}/sessions/devin-slack/messages`]: message('D4D-1'),
+    [`GET ${base}/sessions/devin-later/messages`]: { items: [{ event_id: 'e1', source: 'user', message: 'fix it' }, { event_id: 'e2', source: 'user', message: 'D4D-1' }] },
+    [`GET ${base}/sessions/devin-own/messages`]: message('Link with code D4D-1 please')
+  });
+  const found = await adapter(impl).findLinkSession('D4D-1', 1_700_000_000_000);
+  assert.deepEqual(found, { userId: 'user-me', sessionId: 'devin-own', url: 'https://app.devin.ai/sessions/own' });
+  const query = new URL(calls[0].url).searchParams;
+  assert.deepEqual([query.get('created_after'), query.get('origins')], ['1699999940', 'webapp']);
+  assert.ok(!calls.some((call) => /devin-api|devin-slack/.test(call.url)), 'service-user and non-web sessions are skipped');
+});
+
 test('sendMessage names the Discord author and omits unmapped users', async () => {
   const { calls, impl } = fakeFetch({ [`POST ${base}/sessions/devin-abc/messages`]: {} });
   await adapter(impl).sendMessage('devin-abc', {

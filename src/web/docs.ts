@@ -75,6 +75,8 @@ const SECTIONS: Section[] = [
           <tr><td><code>/devin start task:… file:…</code></td><td>Start a task. The file is optional.</td></tr>
           <tr><td><code>/devin status</code></td><td>In a task thread: its status and PRs.</td></tr>
           <tr><td><code>/devin list</code></td><td>Recent tasks, only from threads you can see.</td></tr>
+          <tr><td><code>/devin link</code></td><td>Link your Devin account: it gives you a prompt with a one-time code to start in the Devin web app, then a button to finish. Your tasks then run as you in Devin.</td></tr>
+          <tr><td><code>/devin unlink</code></td><td>Undo the link.</td></tr>
           <tr><td><code>/devin stop</code></td><td>In a task thread: stop the task for good.</td></tr>
           <tr><td><code>/devin sleep</code></td><td>In a task thread: pause it until the next reply.</td></tr>
         </tbody>

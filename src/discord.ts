@@ -30,7 +30,7 @@ import {
   type Message,
   type MessageContextMenuCommandInteraction
 } from 'discord.js';
-import type { Bot, ChannelRef, MessageOutcome, Outcome } from './bot.ts';
+import { LINK_CHECK_ID, type Bot, type ChannelRef, type MessageOutcome, type Outcome } from './bot.ts';
 import type { ChatButton, ChatPort } from './bridge.ts';
 import type { DiscordReader, ForumPost, ReadMessage } from './mcp.ts';
 import type { ForwardedMessage, MentionContext } from './format.ts';
@@ -186,7 +186,11 @@ export function commandDefinitions() {
     .addSubcommand((sub) => sub.setName('stop').setDescription("Stop this thread's task for good"))
     .addSubcommand((sub) =>
       sub.setName('sleep').setDescription("Put this thread's task to sleep; a reply wakes it")
-    );
+    )
+    .addSubcommand((sub) =>
+      sub.setName('link').setDescription('Link your Devin account so the tasks you start run as you')
+    )
+    .addSubcommand((sub) => sub.setName('unlink').setDescription('Unlink your Devin account'));
   const contextMenu = new ContextMenuCommandBuilder()
     .setName('Send to Devin')
     .setType(ApplicationCommandType.Message)
@@ -436,7 +440,11 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore, watcher?
       const outcome = interaction.isMessageContextMenuCommand()
         ? await handleContextMenu(interaction, member)
         : await handleSlash(interaction, member);
-      await interaction.editReply({ content: outcome.reply, allowedMentions: { parse: [] } });
+      await interaction.editReply({
+        content: outcome.reply,
+        allowedMentions: { parse: [] },
+        components: outcome.ok && outcome.buttons?.length ? [buttonRow(outcome.buttons)] : []
+      });
     } catch (error) {
       console.error('Command failed:', error);
       await interaction.editReply(`Failed: ${errorText(error)}`).catch(() => {});
@@ -444,6 +452,7 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore, watcher?
   });
 
   async function handleButton(interaction: ButtonInteraction<'cached'>) {
+    if (interaction.customId === LINK_CHECK_ID) return handleLinkCheck(interaction);
     const control = parseControlId(interaction.customId);
     if (!control) return;
     try {
@@ -461,6 +470,24 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore, watcher?
     } catch (error) {
       console.error('Button failed:', error);
       await interaction.editReply(`Failed: ${errorText(error)}`).catch(() => {});
+    }
+  }
+
+  /** Updates the private `/devin link` message in place, keeping the button until the link is made. */
+  async function handleLinkCheck(interaction: ButtonInteraction<'cached'>) {
+    try {
+      await interaction.deferUpdate();
+      const outcome = await bot.linkCheck(interaction.guildId, memberSnapshot(interaction.member));
+      const retry = !outcome.ok && outcome.reason === 'empty';
+      const intro = interaction.message.content.split('\n\n')[0];
+      await interaction.editReply({
+        content: retry ? `${intro}\n\n**Not found yet.** ${outcome.reply}`.slice(0, 2000) : outcome.reply,
+        allowedMentions: { parse: [] },
+        components: retry ? interaction.message.components : []
+      });
+    } catch (error) {
+      console.error('Link check failed:', error);
+      await interaction.followUp({ content: `Failed: ${errorText(error)}`, flags: MessageFlags.Ephemeral }).catch(() => {});
     }
   }
 
@@ -493,6 +520,8 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore, watcher?
       );
     }
     if (sub === 'status') return bot.status(interaction.guildId, member, interaction.channelId);
+    if (sub === 'link') return bot.link(interaction.guildId, member);
+    if (sub === 'unlink') return bot.unlink(interaction.guildId, member);
     if (sub === 'stop' || sub === 'sleep') {
       return bot.controlThread(sub, interaction.guildId, member, interaction.channelId);
     }

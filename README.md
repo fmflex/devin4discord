@@ -19,6 +19,7 @@ Hand Discord messages to Devin and follow the work in a Discord thread. One host
 - **Overview:** `/devin status` inside a thread, `/devin list` anywhere (only tasks in threads you can see).
 - **Merge:** `/devin merge` in a task thread merges its pull request (the newest open one) once all its checks have passed, with the repo's merge method. For another PR, pass `pr:42` (same repo as the thread's PR, or the only default repo) or a full PR URL. The bot merges with the GitHub token saved on the **Devin** page, so Devin itself needs no merge rights; branch protection still applies. Needs **Merge PRs**.
 - **Review:** `/devin review` in a task thread starts a Devin Review of its newest pull request; `pr:` picks another one the same way. Findings show up on the PR. Needs Start tasks or Manage tasks.
+- **Link your Devin account:** `/devin link` (needs Start tasks) privately gives you a one-time code and a prompt to paste into a new session you start in the Devin web app, signed in as yourself; then click the button under the reply. The bot finds a web app session created by a Devin user (not a service user) after the code was issued whose first message holds the code, and maps you to that user on the Devin page's "Run as Devin users" list, so your tasks and replies are created as you. Codes expire after 30 minutes; one Devin user links to one Discord member; `/devin unlink` undoes it. Both are audited.
 
 ## Who can do what
 
@@ -110,6 +111,17 @@ The token decides which server a call is for. The MCP page picks separate Read a
 
 Run exactly one copy per bot token. Two copies would both relay every message.
 
+### Deploying updates automatically
+
+To redeploy whenever something is merged to `main`, install the deploy timer once from the checkout on the host:
+
+```sh
+sudo sh deploy/install-auto-deploy.sh
+journalctl -u devin4discord-deploy -f
+```
+
+Every minute, [`deploy/auto-deploy.sh`](deploy/auto-deploy.sh) fetches `origin/main`. When there's a new commit and every GitHub Actions check on it has passed, it fast-forwards the checkout and runs `docker compose up -d --build`. A commit whose CI failed is skipped, and a commit whose CI is still running is retried on the next run. Nothing needs to reach the host from outside, and no secrets are involved. The checkout must stay on `main` with no local commits, so keep host settings in `.env` (including `COMPOSE_PROFILES`). Run the script by hand to deploy straight away. If the host shares an IP that hits GitHub's unauthenticated API limit, put `GITHUB_TOKEN=<read-only token>` in `/etc/devin4discord-deploy.env`.
+
 Without Docker, Node 24+ also works: `npm ci && npm start`, with the UI reached at `PUBLIC_URL` through your own reverse proxy or tunnel.
 
 ## Development
@@ -137,6 +149,7 @@ Every call uses the server's service user key against the [Devin API v3](https:/
 | What | Call | Permission |
 | --- | --- | --- |
 | Start a task | `POST /v3/organizations/{org}/sessions` | `UseDevinSessions`; `ImpersonateOrgSessions` for mapped members (`create_as_user_id`) |
+| Pass Discord files to Devin (task start and replies) | [`POST /v3/organizations/{org}/attachments`](https://docs.devin.ai/api-reference/v3/attachments/post-organizations-attachments), after downloading the file from Discord's CDN; `attachment_urls` only accepts the Devin URLs this returns. A file that can't be copied is linked in the message text instead | `UseDevinSessions` |
 | Check a mapped Devin user (on save) | [`GET /v3beta1/organizations/{org}/members/users/{id}`](https://docs.devin.ai/api-reference/v3/users/get-organization-user) | `ViewOrgMembership` |
 | Follow a task | `GET …/sessions/{id}`, `GET …/sessions/{id}/messages` | `ViewOrgSessions` |
 | Upload files Devin attached | `GET /v3/organizations/{org}/attachments/{uuid}/{name}`, then the presigned URL it redirects to (without the key) | Not listed in the docs |

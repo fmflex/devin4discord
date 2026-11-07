@@ -191,6 +191,19 @@ export class GuildStore {
       );
   }
 
+  /** Links (or with null, unlinks) a Discord member to a Devin user, so their tasks run as them. */
+  setUserLink(guildId: string, discordId: string, devinUserId: string | null) {
+    const devin = this.devin(guildId);
+    if (!devin) return;
+    const userMap = { ...devin.userMap };
+    if (devinUserId) userMap[discordId] = devinUserId;
+    else delete userMap[discordId];
+    // updated_at changes too, so the cached Devin client picks up the new map.
+    this.db
+      .prepare('update guild_devin set user_map = ?, updated_at = ? where guild_id = ?')
+      .run(JSON.stringify(userMap), Math.max(Date.now(), devin.updatedAt + 1), guildId);
+  }
+
   clearDevin(guildId: string) {
     this.db.prepare('delete from guild_devin where guild_id = ?').run(guildId);
   }

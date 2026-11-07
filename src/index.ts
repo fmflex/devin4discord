@@ -20,6 +20,7 @@ import { PRUNE_INTERVAL_MS, pruneOldData } from './retention.ts';
 import { TaskStore } from './store.ts';
 import { devinResolver } from './tenants.ts';
 import { createWebApp } from './web/app.ts';
+import { Watcher } from './webhooks.ts';
 import { SessionStore } from './web/sessions.ts';
 
 const config = loadConfig();
@@ -37,7 +38,7 @@ const bridge = new Bridge({
 });
 const bot = new Bot({ bridge, guilds, tasks, publicUrl: config.publicUrl });
 
-wireDiscord(client, bot, tasks);
+wireDiscord(client, bot, tasks, new Watcher({ guilds, secrets }));
 
 const directory = discordDirectory(client);
 const app = createWebApp({

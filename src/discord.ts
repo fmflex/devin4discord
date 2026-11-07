@@ -39,6 +39,7 @@ import type { ChannelInfo, Directory } from './directory.ts';
 import type { MemberSnapshot } from './permissions.ts';
 import type { TaskStore } from './store.ts';
 import { parseControlId } from './triggers.ts';
+import type { ChannelEvent, Watcher } from './webhooks.ts';
 
 export const COMMAND = 'devin';
 export const TRIGGER_EMOJI = '🤖';
@@ -356,6 +357,33 @@ async function loadContext(message: Message<true>, limit: number): Promise<Menti
   return { repliedTo, recent };
 }
 
+/** The body a watched channel's webhook gets for `message`. */
+export function channelEvent(message: Message<true>): ChannelEvent {
+  const channel = message.channel;
+  return {
+    type: 'message.created',
+    guild: { id: message.guildId, name: message.guild.name },
+    channel: {
+      id: channel.id,
+      name: 'name' in channel ? channel.name : '',
+      parentId: channel.isThread() ? channel.parentId : null,
+      isThread: channel.isThread()
+    },
+    message: {
+      id: message.id,
+      link: message.url,
+      content: message.content,
+      author: {
+        id: message.author.id,
+        name: message.member?.displayName ?? message.author.username,
+        bot: message.author.bot
+      },
+      attachments: [...message.attachments.values()].map((file) => ({ filename: file.name, url: file.url })),
+      createdAt: new Date(message.createdTimestamp).toISOString()
+    }
+  };
+}
+
 function mentionsUser(content: string, userId: string) {
   return content.includes(`<@${userId}>`) || content.includes(`<@!${userId}>`);
 }
@@ -374,7 +402,7 @@ export async function backfillTaskGuilds(client: Client, tasks: TaskStore) {
   }
 }
 
-export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore) {
+export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore, watcher?: Watcher) {
   const lastDm = new Map<string, number>();
   async function dmOnce(guildId: string, userId: string, text: string) {
     const key = `${guildId}:${userId}:${text}`;
@@ -495,20 +523,40 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore) {
   });
 
   client.on(Events.MessageCreate, async (message) => {
-    if (message.author.bot || !message.inGuild() || !client.user) return;
+    if (!message.inGuild() || !client.user) return;
     if (message.content.startsWith(IGNORE_PREFIX)) return;
+    const channel = channelRef(message.channel, message.channelId);
+    void watcher
+      ?.notify({
+        guildId: message.guildId,
+        channel,
+        fromSelf: message.author.id === client.user.id,
+        fromBot: message.author.bot || Boolean(message.webhookId),
+        event: () => channelEvent(message)
+      })
+      .catch((error) => console.error('Sending a message to the webhook failed:', errorText(error)));
+    if (message.author.bot) return;
     const inTaskThread = bot.isTaskThread(message.channelId);
-    // Only task threads and @mentions need a member lookup.
-    if (!inTaskThread && !mentionsUser(message.content, client.user.id)) return;
+    const isThreadStarter = message.channel.isThread() && message.id === message.channelId;
+    // Only task threads, @mentions and auto-start channels need a member lookup.
+    if (
+      !inTaskThread &&
+      !mentionsUser(message.content, client.user.id) &&
+      !bot.autoStarts(message.guildId, channel, isThreadStarter)
+    ) {
+      return;
+    }
     try {
       const member = message.member ?? (await message.guild.members.fetch(message.author.id));
       const outcome = await bot.handleMessage({
         guildId: message.guildId,
         member: memberSnapshot(member),
-        channel: channelRef(message.channel, message.channelId),
+        channel,
         message: forwarded(message),
         botUserId: client.user.id,
         isReply: Boolean(message.reference?.messageId),
+        isThreadStarter,
+        threadTitle: message.channel.isThread() ? message.channel.name : undefined,
         loadContext: (limit) => loadContext(message, limit)
       });
       await deliver(message, outcome, inTaskThread);

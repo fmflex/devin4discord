@@ -30,6 +30,7 @@ import {
 import { readFileSync } from 'node:fs';
 import { docsPage } from './docs.ts';
 import { SESSION_TTL_MS, type SessionStore, type WebSession } from './sessions.ts';
+import { MAX_WEBHOOK_SECRET, webhookUrl } from '../webhooks.ts';
 import {
   CSS,
   auditPage,
@@ -41,6 +42,9 @@ import {
   mcpPage,
   permissionsPage,
   pickerPage,
+  watchPage,
+  MAX_WATCH_ACU,
+  MAX_WATCH_COUNT,
   type DevinForm,
   type PageOptions,
   type MentionSettings,
@@ -636,6 +640,135 @@ export function createWebApp(deps: WebDeps) {
         (ignored.size ? `; ignored channels the editor can't view: ${[...ignored].map(label).join(', ')}` : '')
     );
     return c.redirect(savedRedirect(`/g/${guild.id}/channels`, form));
+  });
+
+  function webhookView(guildId: string) {
+    const webhook = deps.guilds.webhook(guildId);
+    return webhook
+      ? {
+          hint: webhook.urlHint,
+          hasSecret: webhook.secretEncrypted !== null,
+          includeThreads: webhook.includeThreads,
+          includeBots: webhook.includeBots
+        }
+      : null;
+  }
+
+  async function renderWatch(c: Context<Env>, notice: PageOptions['notice'], query = channelQuery(c)) {
+    const { session, guild } = ctx(c);
+    return watchPage(
+      session,
+      guild,
+      await deps.directory.channels(guild.id),
+      deps.guilds.watchChannels(guild.id),
+      deps.guilds.watchLimits(guild.id),
+      webhookView(guild.id),
+      notice,
+      c.get('member').isAdmin,
+      query
+    );
+  }
+
+  app.get('/g/:guildId/watch', async (c) => c.html(await renderWatch(c, noticeFrom(c))));
+
+  // Auto-start spends ACUs on any member's message and the webhook sends channel text off Discord,
+  // so both are for Discord Administrators.
+  app.post('/g/:guildId/watch/channels', adminOnly, async (c) => {
+    const { guild, actor } = ctx(c);
+    const form = (await c.req.parseBody({ all: true })) as Form;
+    const channels = await deps.directory.channels(guild.id);
+    const names = new Map(channels.map((channel) => [channel.id, channel.name]));
+    const scope = listScope(form);
+    const inScope = (id: string) => names.has(id) && (!scope || scope.has(id));
+    const before = new Map(deps.guilds.watchChannels(guild.id).map((entry) => [entry.channelId, entry]));
+    const limit = (name: string, max: number) => {
+      const value = Number(field(form, name));
+      return Number.isInteger(value) && value >= 1 && value <= max ? value : null;
+    };
+    const limits = {
+      maxAcu: limit('max_acu', MAX_WATCH_ACU),
+      tasksPerDay: limit('tasks_per_day', MAX_WATCH_COUNT),
+      concurrentTasks: limit('concurrent_tasks', MAX_WATCH_COUNT)
+    };
+    if (limits.maxAcu === null || limits.tasksPerDay === null || limits.concurrentTasks === null) {
+      const text = `Limits must be whole numbers: ACU per task 1–${MAX_WATCH_ACU}, tasks 1–${MAX_WATCH_COUNT}.`;
+      return c.html(await renderWatch(c, { kind: 'error', text }, field(form, 'q').slice(0, MAX_CHANNEL_QUERY)), 400);
+    }
+    const autoStart = new Set(fields(form, 'auto_start').filter(inScope));
+    const anyone = new Set(fields(form, 'anyone').filter(inScope));
+    const webhook = new Set(fields(form, 'webhook').filter(inScope));
+    const watch = channels.map((channel) => {
+      const old = before.get(channel.id);
+      return inScope(channel.id)
+        ? {
+            channelId: channel.id,
+            autoStart: autoStart.has(channel.id),
+            webhook: webhook.has(channel.id),
+            anyone: autoStart.has(channel.id) && anyone.has(channel.id)
+          }
+        : { channelId: channel.id, autoStart: old?.autoStart ?? false, webhook: old?.webhook ?? false, anyone: old?.anyone ?? false };
+    });
+    deps.guilds.setWatchChannels(guild.id, watch);
+    deps.guilds.setWatchLimits(guild.id, { maxAcu: limits.maxAcu, tasksPerDay: limits.tasksPerDay, concurrentTasks: limits.concurrentTasks });
+    const label = (id: string) => `#${names.get(id)}`;
+    const list = (key: 'autoStart' | 'webhook' | 'anyone') =>
+      watch.filter((entry) => entry[key]).map((entry) => label(entry.channelId)).join(', ') || 'none';
+    deps.guilds.audit(
+      guild.id,
+      actor,
+      'watch.channels',
+      `auto-start: ${list('autoStart')}; anyone: ${list('anyone')}; webhook: ${list('webhook')}; anyone limits: ${limits.maxAcu} ACU, ${limits.tasksPerDay}/day, ${limits.concurrentTasks} at once`
+    );
+    return c.redirect(savedRedirect(`/g/${guild.id}/watch`, form));
+  });
+
+  app.post('/g/:guildId/watch/webhook', adminOnly, async (c) => {
+    const { guild, actor } = ctx(c);
+    const form = (await c.req.parseBody({ all: true })) as Form;
+    const current = deps.guilds.webhook(guild.id);
+    const rawUrl = field(form, 'url').trim();
+    const secret = field(form, 'secret').trim();
+    const fail = async (text: string) => c.html(await renderWatch(c, { kind: 'error', text }, ''), 400);
+    if (!rawUrl && !current) return fail('Enter the webhook URL.');
+    let urlEncrypted = current?.urlEncrypted ?? '';
+    let urlHint = current?.urlHint ?? '';
+    if (rawUrl) {
+      let url: URL;
+      try {
+        url = webhookUrl(rawUrl);
+      } catch (error) {
+        return fail(error instanceof Error ? error.message : String(error));
+      }
+      urlEncrypted = deps.secrets.encrypt(url.href, guild.id);
+      urlHint = url.host;
+    }
+    if (secret.length > MAX_WEBHOOK_SECRET) return fail(`The secret can be at most ${MAX_WEBHOOK_SECRET} characters.`);
+    const includeThreads = field(form, 'include_threads') === 'on';
+    const includeBots = field(form, 'include_bots') === 'on';
+    deps.guilds.saveWebhook(guild.id, {
+      urlEncrypted,
+      urlHint,
+      secretEncrypted: secret ? deps.secrets.encrypt(secret, guild.id) : current?.secretEncrypted ?? null,
+      includeThreads,
+      includeBots
+    });
+    deps.guilds.audit(
+      guild.id,
+      actor,
+      'webhook.update',
+      `host: ${urlHint}${rawUrl ? ' (URL changed)' : ''}; secret: ${secret ? 'changed' : current?.secretEncrypted ? 'kept' : 'none'}; threads: ${includeThreads ? 'yes' : 'no'}; bots: ${includeBots ? 'yes' : 'no'}`
+    );
+    return c.redirect(`/g/${guild.id}/watch?saved=1`);
+  });
+
+  app.post('/g/:guildId/watch/webhook/remove', adminOnly, (c) => {
+    const { guild, actor } = ctx(c);
+    const current = deps.guilds.webhook(guild.id);
+    if (current) {
+      deps.guilds.clearWebhook(guild.id);
+      deps.guilds.audit(guild.id, actor, 'webhook.remove', `host: ${current.urlHint}`);
+    }
+    return c.redirect(`/g/${guild.id}/watch?saved=1`);
   });
 
   const mcpUrl = `${deps.publicUrl}/mcp`;

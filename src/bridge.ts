@@ -62,6 +62,8 @@ export type StartRequest = {
       context: MentionContext;
       /** Open the thread on the message itself rather than posting a new one. */
       threadOnMessage: boolean;
+      /** `channelId` is the thread the message started (a forum post): use it as the task thread. */
+      inThread?: boolean;
     }
 );
 
@@ -143,7 +145,10 @@ export class Bridge {
     const source = forwarded ? ` from ${forwarded.link}` : '';
     const intro = `**${title}**\nStarted by <@${request.opener.discordId}>${source}\n${task.url}`;
     let threadId: string;
-    if (request.kind === 'mention' && request.threadOnMessage) {
+    if (request.kind === 'mention' && request.inThread) {
+      threadId = request.channelId;
+      await this.post(threadId, intro);
+    } else if (request.kind === 'mention' && request.threadOnMessage) {
       threadId = await this.chat.createThreadOnMessage(request.channelId, request.message.id, `Devin: ${title}`);
       await this.post(threadId, intro);
     } else {

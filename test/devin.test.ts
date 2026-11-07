@@ -119,6 +119,10 @@ test('parseAgentMessage moves Devin attachment lines out of the text', () => {
     ]
   });
   assert.deepEqual(parseAgentMessage('no files'), { text: 'no files', files: [] });
+  const offer = 'PR is open.\n\n[OFFER_TEST_APP]Test the Watched channels tab[/OFFER_TEST_APP]\nATTACHMENT:{"url":"https://app.devin.ai/attachments/ab-12/ss.png"}';
+  assert.deepEqual(parseAgentMessage(offer), { text: 'PR is open.', files: [{ uuid: 'ab-12', name: 'ss.png' }] });
+  const kept = 'Use [b]bold[/b] or [NOTE]a[/OTHER] inline: [OFFER_TEST_APP]x[/OFFER_TEST_APP] stays mid-line.';
+  assert.equal(parseAgentMessage(kept).text, kept);
 });
 
 test('downloadAttachment follows the redirect without sending the API key', async () => {

@@ -291,7 +291,7 @@ export class Bot {
         '```',
         '**2.** Come back here and click the button below. The code works for 30 minutes.',
         '',
-        "Once linked, tasks you start from Discord are created as your Devin user and show up under your account. You can stop that Devin session after it replies. Only start it if you ran `/devin link` yourself; `/devin unlink` undoes the link."
+        "Once linked, tasks you start from Discord are created as your Devin user and show up under your account. This needs `ImpersonateOrgSessions` on the server's Devin service user. You can stop that Devin session after it replies. Only start it if you ran `/devin link` yourself; `/devin unlink` undoes the link."
       ].join('\n')
     };
   }

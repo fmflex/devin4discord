@@ -82,10 +82,13 @@ const MAX_MESSAGE_PAGES = 20;
 
 const ATTACHMENT_LINE = /^[ \t]*ATTACHMENT:(\{.*\})[ \t]*$/gm;
 const ATTACHMENT_PATH = /\/attachments\/([\w-]{1,100})\/([^/?#]{1,255})$/;
+/** Lines like `[OFFER_TEST_APP]Test the app[/OFFER_TEST_APP]`: UI controls for Devin's own webapp, not text. */
+const CONTROL_LINE = /^[ \t]*\[([A-Z][A-Z0-9_]{2,40})\][^\n]*\[\/\1\][ \t]*$/gm;
 
 /**
  * Splits the `ATTACHMENT:{"url": …}` lines Devin appends for attached files out of a
- * message. Lines that don't hold a Devin attachment URL stay in the text.
+ * message, and drops control-marker lines meant for Devin's webapp. Lines that don't hold
+ * a Devin attachment URL stay in the text.
  */
 export function parseAgentMessage(message: string): { text: string; files: AgentFile[] } {
   const files: AgentFile[] = [];
@@ -109,7 +112,7 @@ export function parseAgentMessage(message: string): { text: string; files: Agent
     files.push({ uuid: match[1], name });
     return '';
   });
-  return { text: text.replace(/\n{3,}/g, '\n\n').trim(), files };
+  return { text: text.replace(CONTROL_LINE, '').replace(/\n{3,}/g, '\n\n').trim(), files };
 }
 
 export function devinState(

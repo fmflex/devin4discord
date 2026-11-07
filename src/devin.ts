@@ -36,6 +36,12 @@ export type DownloadedFile = { name: string; data: Uint8Array };
 /** Discord's upload limit for servers without boosts. */
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
+/** Largest Discord file the bot copies to Devin; bigger ones are passed as a link in the text. */
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+/** Only files on Discord's CDN are fetched, so message content can't make the bot request other URLs. */
+const DISCORD_CDN_HOSTS = new Set(['cdn.discordapp.com', 'media.discordapp.net']);
+
 export type TaskUpdate = {
   state: TaskState;
   /** Human-readable state, e.g. "waiting for a reply". */
@@ -263,14 +269,15 @@ export class DevinClient {
 
   async startTask(input: StartTaskInput): Promise<StartedTask> {
     const asUser = this.config.userMap[input.requestedBy.discordId];
+    const files = await this.uploadAll(input.attachments);
     const session = await this.request<DevinSession>('/sessions', 'POST', {
-      prompt: input.prompt,
+      prompt: `${input.prompt}${files.note}`,
       title: input.title,
       tags: ['discord', `discord-guild:${input.guildId}`, `discord-user:${input.requestedBy.discordId}`],
       ...(this.config.repos.length ? { repos: this.config.repos } : {}),
       ...(input.maxAcu ? { max_acu_limit: input.maxAcu } : {}),
       ...(asUser ? { create_as_user_id: asUser } : {}),
-      ...attachmentField(input.attachments)
+      ...files.field
     });
     return { id: session.session_id, url: session.url };
   }
@@ -280,9 +287,10 @@ export class DevinClient {
     input: { text: string; attachments: Attachment[]; from: Person }
   ) {
     const asUser = this.config.userMap[input.from.discordId];
+    const files = await this.uploadAll(input.attachments);
     await this.request(`/sessions/${encodeURIComponent(taskId)}/messages`, 'POST', {
-      message: `${input.from.name} (Discord): ${input.text}`,
-      ...attachmentField(input.attachments),
+      message: `${input.from.name} (Discord): ${input.text}${files.note}`,
+      ...files.field,
       ...(asUser ? { message_as_user_id: asUser } : {})
     });
   }
@@ -322,6 +330,57 @@ export class DevinClient {
   /** `POST .../sessions/{id}/unarchive`, after a reply wakes a session we put to sleep. */
   async unarchive(taskId: string) {
     await this.request(`/sessions/${encodeURIComponent(taskId)}/unarchive`, 'POST');
+  }
+
+  /**
+   * Copies a Discord file to Devin with `POST /v3/organizations/{org}/attachments` and returns
+   * its Devin URL: `attachment_urls` only takes Devin attachment URLs, not Discord CDN links.
+   */
+  async uploadAttachment(file: Attachment): Promise<string> {
+    const source = new URL(file.url);
+    if (source.protocol !== 'https:' || !DISCORD_CDN_HOSTS.has(source.hostname)) {
+      throw new Error(`${file.filename} isn't a Discord attachment.`);
+    }
+    const download = await this.fetch(source, { redirect: 'error' });
+    if (!download.ok) throw new Error(`Downloading ${file.filename} from Discord failed with ${download.status}.`);
+    if (Number(download.headers.get('content-length')) > MAX_UPLOAD_BYTES) {
+      throw new Error(`${file.filename} is too large to copy to Devin.`);
+    }
+    const data = await download.arrayBuffer();
+    if (data.byteLength > MAX_UPLOAD_BYTES) throw new Error(`${file.filename} is too large to copy to Devin.`);
+    const form = new FormData();
+    const type = download.headers.get('content-type') ?? 'application/octet-stream';
+    form.append('file', new Blob([data], { type }), file.filename);
+    const path = `/v3/organizations/${encodeURIComponent(this.config.orgId)}/attachments`;
+    const response = await this.fetch(`${this.config.baseUrl.replace(/\/+$/, '')}${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.config.apiKey}` },
+      body: form
+    });
+    if (!response.ok) {
+      throw new DevinApiError(`Devin API POST /attachments failed with ${response.status}`, response.status);
+    }
+    const uploaded = (await response.json()) as { url?: unknown };
+    if (typeof uploaded.url !== 'string') throw new Error('Devin returned no attachment URL.');
+    return uploaded.url;
+  }
+
+  /** Uploads every file it can; the rest are named with their Discord link in `note` so nothing is lost. */
+  private async uploadAll(attachments: Attachment[]) {
+    const urls: string[] = [];
+    const failed: Attachment[] = [];
+    for (const file of attachments) {
+      try {
+        urls.push(await this.uploadAttachment(file));
+      } catch (error) {
+        console.error(`Copying ${file.filename} to Devin failed:`, error instanceof Error ? error.message : String(error));
+        failed.push(file);
+      }
+    }
+    const note = failed.length
+      ? `\n\nThese files couldn't be attached; open them from Discord:\n${failed.map((file) => `- ${file.filename}: ${file.url}`).join('\n')}`
+      : '';
+    return { field: urls.length ? { attachment_urls: urls } : {}, note };
   }
 
   /**
@@ -378,8 +437,3 @@ export class DevinClient {
   }
 }
 
-function attachmentField(attachments: Attachment[]) {
-  return attachments.length
-    ? { attachment_urls: attachments.map((file) => file.url) }
-    : {};
-}

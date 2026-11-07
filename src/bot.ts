@@ -78,6 +78,11 @@ export function unconfiguredReply(publicUrl: string) {
   return `Devin isn't set up in this server yet. An admin can set it up at ${publicUrl}`;
 }
 
+/** A thread notice after a merge or review failed to post; the action itself already happened. */
+function logNotice(error: unknown) {
+  console.error('Posting the thread notice failed:', error);
+}
+
 function parseRepo(fullName: string) {
   const [owner, repo, ...rest] = fullName.split('/');
   return owner && repo && !rest.length ? { owner, repo } : null;
@@ -360,7 +365,7 @@ export class Bot {
       }
       const merged = await github.merge(ref);
       this.guilds.audit(guildId, { id: member.id, name: member.name }, 'pr.merge', `${merged.url} (${merged.method})`);
-      if (target.row) await this.bridge.notify(target.row.threadId, `Merged ${merged.url} by <@${member.id}>.`);
+      if (target.row) await this.bridge.notify(target.row.threadId, `Merged ${merged.url} by <@${member.id}>.`).catch(logNotice);
       return { ok: true, reply: `Merged **${merged.title}**: ${merged.url}` };
     } catch (error) {
       return deny('failed', `Couldn't merge: ${error instanceof Error ? error.message : String(error)}`);
@@ -380,7 +385,7 @@ export class Bot {
       return deny('failed', `Couldn't start Devin Review: ${error instanceof Error ? error.message : String(error)}`);
     }
     this.guilds.audit(guildId, { id: member.id, name: member.name }, 'pr.review', url);
-    if (target.row) await this.bridge.notify(target.row.threadId, `Devin Review requested for ${url} by <@${member.id}>.`);
+    if (target.row) await this.bridge.notify(target.row.threadId, `Devin Review requested for ${url} by <@${member.id}>.`).catch(logNotice);
     return { ok: true, reply: `Devin Review started for ${url}. Its findings show up on the PR.` };
   }
 

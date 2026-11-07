@@ -61,7 +61,7 @@ test('admin stats count usage, servers and the database', () => {
   assert.equal(stats.tasks.sleeping, 1);
   assert.equal(stats.tasks.withPr30d, 1);
   assert.equal(stats.tasks.longRunning, 1);
-  assert.equal(stats.daily.length, 30);
+  assert.equal(stats.daily.length, 31);
   assert.equal(stats.daily.reduce((sum, d) => sum + d.tasks, 0), 3);
   assert.deepEqual(stats.actions[0], { action: 'task.stop', count: 2 });
   assert.equal(stats.servers.botIn, 2);

@@ -199,7 +199,7 @@ export function collectAdminStats(deps: {
     .all(since30d) as { day: string; n: number; u: number }[];
   const byDay = new Map(dayRows.map((r) => [r.day, r]));
   const daily: AdminStats['daily'] = [];
-  for (let i = 29; i >= 0; i--) {
+  for (let i = 30; i >= 0; i--) {
     const day = new Date(now - i * DAY).toISOString().slice(0, 10);
     const row = byDay.get(day);
     daily.push({ day, tasks: Number(row?.n ?? 0), users: Number(row?.u ?? 0) });

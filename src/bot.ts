@@ -290,6 +290,10 @@ export class Bot {
       return deny('ended', 'That code has expired. Run `/devin link` to get a new one.');
     }
     const found = await this.bridge.findLinkSession(guildId, pending.code, pending.issuedAt);
+    // `/devin unlink` (or a new `/devin link`) while Devin was being asked cancels this check.
+    if (this.linkCodes.get(key) !== pending) {
+      return deny('ended', 'That link was cancelled. Run `/devin link` to start again.');
+    }
     if (!found) {
       return {
         ok: false,

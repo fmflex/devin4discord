@@ -558,6 +558,15 @@ test('/devin link links a member only after they prove the Devin account is thei
   const expired = await t.bot.linkCheck(G, member({ id: '4', roleIds: [G, HELPER] }));
   assert.equal(!expired.ok && expired.reason, 'ended');
 
+  const racer = member({ id: '5', roleIds: [G, HELPER] });
+  const raceCode = /D4D-[0-9A-F]{10}/.exec(t.bot.link(G, racer).reply)![0];
+  t.linkSessions.set(raceCode, { userId: 'user-racer', sessionId: 'devin-3', url: 'u' });
+  const checking = t.bot.linkCheck(G, racer);
+  t.bot.unlink(G, racer);
+  const cancelled = await checking;
+  assert.equal(!cancelled.ok && cancelled.reason, 'ended', 'an unlink during the check wins');
+  assert.equal(t.guilds.devin(G)!.userMap['5'], undefined);
+
   assert.match(t.bot.unlink(G, helper).reply, /Unlinked from Devin user `user-helper`/);
   assert.equal(t.guilds.devin(G)!.userMap['2'], undefined);
   assert.equal(t.guilds.auditLog(G)[0].action, 'devin.unlink');

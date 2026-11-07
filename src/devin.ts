@@ -295,6 +295,18 @@ export async function verifyDevinOrgUser(
   }
 }
 
+/**
+ * Acting as a linked Devin user needs `ImpersonateOrgSessions` on the service user; without it
+ * Devin answers a bare 403, so say what to fix.
+ */
+function asUserError(error: unknown, asUser: string | undefined): unknown {
+  if (!asUser || !(error instanceof DevinApiError) || error.status !== 403) return error;
+  return new DevinApiError(
+    `Your Discord account is linked to Devin user ${asUser}, but this server's Devin service user can't act as it (403). Ask an admin to give the service user's role ImpersonateOrgSessions, or run /devin unlink to run tasks as the service user.`,
+    error.status
+  );
+}
+
 export class DevinClient {
   private readonly config: DevinConfig;
   private readonly fetch: typeof fetch;
@@ -315,6 +327,8 @@ export class DevinClient {
       ...(input.maxAcu ? { max_acu_limit: input.maxAcu } : {}),
       ...(asUser ? { create_as_user_id: asUser } : {}),
       ...files.field
+    }).catch((error) => {
+      throw asUserError(error, asUser);
     });
     return { id: session.session_id, url: session.url };
   }
@@ -329,6 +343,8 @@ export class DevinClient {
       message: `${input.from.name} (Discord): ${input.text}${files.note}`,
       ...files.field,
       ...(asUser ? { message_as_user_id: asUser } : {})
+    }).catch((error) => {
+      throw asUserError(error, asUser);
     });
   }
 

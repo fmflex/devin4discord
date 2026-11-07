@@ -75,6 +75,23 @@ test('startTask sends the prompt, attachments, limits and the mapped Devin user'
   });
 });
 
+test('a 403 for a linked member says the service user needs ImpersonateOrgSessions', async () => {
+  const forbidden = (async () => new Response(JSON.stringify({ detail: 'Unauthorized' }), { status: 403 })) as typeof fetch;
+  const start = { prompt: 'p', title: 't', attachments: [], guildId: '900', maxAcu: null };
+  await assert.rejects(
+    adapter(forbidden).startTask({ ...start, requestedBy: { discordId: '42', name: 'Jo' } }),
+    /linked to Devin user user-devin-42.*ImpersonateOrgSessions.*\/devin unlink/
+  );
+  await assert.rejects(
+    adapter(forbidden).sendMessage('devin-abc', { text: 'hi', attachments: [], from: { discordId: '42', name: 'Jo' } }),
+    /ImpersonateOrgSessions/
+  );
+  await assert.rejects(
+    adapter(forbidden).startTask({ ...start, requestedBy: { discordId: '7', name: 'Al' } }),
+    /^Error: Devin API POST \/sessions failed with 403: Unauthorized$/
+  );
+});
+
 test('files that cannot be copied to Devin are linked in the message instead of failing it', async () => {
   const { calls, impl } = fakeFetch({
     [`POST ${base}/sessions/devin-abc/messages`]: {},

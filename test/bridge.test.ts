@@ -211,11 +211,11 @@ test('one failing task does not stop the others from syncing', async () => {
   assert.deepEqual(t.sent, [{ channelId: 'thread-2', content: '**Devin:** hello' }]);
 });
 
-test('a task whose thread was deleted stops being polled without logging an error', async () => {
+test('a task whose thread was deleted stops being polled, even with nothing new to post', async () => {
   const t = setup();
   await t.bridge.start({ kind: 'prompt', ...base, channelId: 'chan', task: 'x', attachments: [] });
   t.deleted.add('thread-1');
-  t.updates.set('task-1', update({ messages: [{ id: 'e1', text: 'hello', files: [] }], cursor: 'e1' }));
+  t.updates.set('task-1', update({}));
   const errors: unknown[] = [];
   const originalError = console.error;
   const originalLog = console.log;

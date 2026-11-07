@@ -271,14 +271,14 @@ export class Bridge {
   async syncAll() {
     for (const row of this.store.active()) {
       try {
-        await this.sync(row);
-      } catch (error) {
-        if (!(await this.chat.threadExists(row.threadId).catch(() => true))) {
+        if (!(await this.chat.threadExists(row.threadId))) {
           // Its thread was deleted: nowhere to relay to, so stop polling it.
           this.store.update(row.taskId, { active: false, stateLabel: 'thread deleted' });
           console.log(`Task ${row.taskId} stopped syncing: its thread ${row.threadId} was deleted.`);
           continue;
         }
+        await this.sync(row);
+      } catch (error) {
         console.error(`Syncing task ${row.taskId} failed:`, error);
       }
     }

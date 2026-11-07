@@ -125,7 +125,30 @@ export const MIGRATIONS: string[] = [
 
   // 8: MCP read/post scope: 'custom' (the lists above) or 'bot' (wherever the bot's Discord permissions allow).
   `alter table guilds add column mcp_read_mode text not null default 'custom';
-   alter table guilds add column mcp_post_mode text not null default 'custom';`
+   alter table guilds add column mcp_post_mode text not null default 'custom';`,
+
+  // 9: watched channels (auto-start tasks, send messages to a webhook) and the server's webhook.
+  `create table guild_watch_channels (
+     guild_id text not null references guilds (guild_id) on delete cascade,
+     channel_id text not null,
+     auto_start integer not null default 0,
+     webhook integer not null default 0,
+     anyone integer not null default 0,
+     primary key (guild_id, channel_id)
+   );
+   alter table guilds add column watch_max_acu integer not null default 5;
+   alter table guilds add column watch_tasks_per_day integer not null default 3;
+   alter table guilds add column watch_concurrent_tasks integer not null default 1;
+
+   create table guild_webhook (
+     guild_id text primary key references guilds (guild_id) on delete cascade,
+     url_encrypted text not null,
+     url_hint text not null,
+     secret_encrypted text,
+     include_threads integer not null default 0,
+     include_bots integer not null default 0,
+     updated_at integer not null
+   );`
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

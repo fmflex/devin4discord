@@ -33,6 +33,31 @@ export type DevinSettings = {
 export type McpMode = 'custom' | 'bot';
 export type McpModes = { read: McpMode; post: McpMode };
 
+/** A channel the bot watches: new messages there start tasks, go to the server's webhook, or both. */
+export type WatchChannel = {
+  channelId: string;
+  autoStart: boolean;
+  webhook: boolean;
+  /** With auto-start: members without Start tasks may start tasks here too, within `watchLimits`. */
+  anyone: boolean;
+};
+
+export const DEFAULT_WATCH_LIMITS = { maxAcu: 5, tasksPerDay: 3, concurrentTasks: 1 } as const;
+
+export type WebhookSettings = {
+  /** AES-256-GCM ciphertext of the URL, bound to the guild ID (URLs often carry a token). */
+  urlEncrypted: string;
+  /** The URL's host, shown in the UI and the audit log. */
+  urlHint: string;
+  /** Sent as `X-Webhook-Secret`; null sends none. */
+  secretEncrypted: string | null;
+  /** Also send messages in threads under a watched channel. */
+  includeThreads: boolean;
+  /** Also send messages from other bots and Discord webhooks (never the bot's own). */
+  includeBots: boolean;
+  updatedAt: number;
+};
+
 export type AuditEntry = {
   id: number;
   actorId: string;
@@ -291,6 +316,120 @@ export class GuildStore {
         'update guilds set context_messages = ?, mention_only_replies = ?, updated_at = ? where guild_id = ?'
       )
       .run(contextMessages, mentionOnlyReplies ? 1 : 0, Date.now(), guildId);
+  }
+
+  watchChannels(guildId: string): WatchChannel[] {
+    const rows = this.db
+      .prepare('select channel_id, auto_start, webhook, anyone from guild_watch_channels where guild_id = ? order by channel_id')
+      .all(guildId) as { channel_id: string; auto_start: number; webhook: number; anyone: number }[];
+    return rows.map((row) => ({
+      channelId: row.channel_id,
+      autoStart: row.auto_start === 1,
+      webhook: row.webhook === 1,
+      anyone: row.anyone === 1
+    }));
+  }
+
+  /** The watch settings of one channel; null when it isn't watched. Called for every guild message. */
+  watchChannel(guildId: string, channelId: string): WatchChannel | null {
+    const row = this.db
+      .prepare('select auto_start, webhook, anyone from guild_watch_channels where guild_id = ? and channel_id = ?')
+      .get(guildId, channelId) as { auto_start: number; webhook: number; anyone: number } | undefined;
+    return row
+      ? { channelId, autoStart: row.auto_start === 1, webhook: row.webhook === 1, anyone: row.anyone === 1 }
+      : null;
+  }
+
+  /** Limits for members without Start tasks in "anyone" channels. */
+  watchLimits(guildId: string): Limits {
+    const row = this.db
+      .prepare('select watch_max_acu, watch_tasks_per_day, watch_concurrent_tasks from guilds where guild_id = ?')
+      .get(guildId) as { watch_max_acu: number; watch_tasks_per_day: number; watch_concurrent_tasks: number } | undefined;
+    return row
+      ? { maxAcu: row.watch_max_acu, tasksPerDay: row.watch_tasks_per_day, concurrentTasks: row.watch_concurrent_tasks }
+      : { ...DEFAULT_WATCH_LIMITS };
+  }
+
+  setWatchLimits(guildId: string, limits: { maxAcu: number; tasksPerDay: number; concurrentTasks: number }) {
+    this.ensure(guildId);
+    this.db
+      .prepare(
+        'update guilds set watch_max_acu = ?, watch_tasks_per_day = ?, watch_concurrent_tasks = ?, updated_at = ? where guild_id = ?'
+      )
+      .run(limits.maxAcu, limits.tasksPerDay, limits.concurrentTasks, Date.now(), guildId);
+  }
+
+  /** Replaces every watched channel. Channels with nothing ticked are not stored; "anyone" needs auto-start. */
+  setWatchChannels(guildId: string, channels: WatchChannel[]) {
+    this.ensure(guildId);
+    const insert = this.db.prepare(
+      'insert or replace into guild_watch_channels (guild_id, channel_id, auto_start, webhook, anyone) values (?, ?, ?, ?, ?)'
+    );
+    this.transaction(() => {
+      this.db.prepare('delete from guild_watch_channels where guild_id = ?').run(guildId);
+      for (const channel of channels) {
+        if (!channel.autoStart && !channel.webhook) continue;
+        insert.run(
+          guildId,
+          channel.channelId,
+          channel.autoStart ? 1 : 0,
+          channel.webhook ? 1 : 0,
+          channel.autoStart && channel.anyone ? 1 : 0
+        );
+      }
+    });
+  }
+
+  webhook(guildId: string): WebhookSettings | null {
+    const row = this.db.prepare('select * from guild_webhook where guild_id = ?').get(guildId) as
+      | {
+          url_encrypted: string;
+          url_hint: string;
+          secret_encrypted: string | null;
+          include_threads: number;
+          include_bots: number;
+          updated_at: number;
+        }
+      | undefined;
+    return row
+      ? {
+          urlEncrypted: row.url_encrypted,
+          urlHint: row.url_hint,
+          secretEncrypted: row.secret_encrypted,
+          includeThreads: row.include_threads === 1,
+          includeBots: row.include_bots === 1,
+          updatedAt: row.updated_at
+        }
+      : null;
+  }
+
+  saveWebhook(guildId: string, webhook: Omit<WebhookSettings, 'updatedAt'>) {
+    this.ensure(guildId);
+    this.db
+      .prepare(
+        `insert into guild_webhook (guild_id, url_encrypted, url_hint, secret_encrypted, include_threads, include_bots, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)
+         on conflict (guild_id) do update set
+           url_encrypted = excluded.url_encrypted,
+           url_hint = excluded.url_hint,
+           secret_encrypted = excluded.secret_encrypted,
+           include_threads = excluded.include_threads,
+           include_bots = excluded.include_bots,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        guildId,
+        webhook.urlEncrypted,
+        webhook.urlHint,
+        webhook.secretEncrypted,
+        webhook.includeThreads ? 1 : 0,
+        webhook.includeBots ? 1 : 0,
+        Date.now()
+      );
+  }
+
+  clearWebhook(guildId: string) {
+    this.db.prepare('delete from guild_webhook where guild_id = ?').run(guildId);
   }
 
   /** The server's MCP token, without the token itself. */

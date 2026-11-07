@@ -604,6 +604,86 @@ test('a role-granted settings holder can view but not change permissions, the De
   assert.equal(t.guilds.auditLog(G).length, before);
 });
 
+test('watched channels and the webhook are set by Administrators, stored encrypted and audited', async () => {
+  const t = setup();
+  const { session, csrf } = await signIn(t);
+  const empty = await (await t.request(`/g/${G}/watch`, { headers: { cookie: session } })).text();
+  assert.match(empty, /aria-label="About auto-start"/);
+  assert.match(empty, /aria-label="About anyone can start"/);
+  assert.match(empty, /No webhook yet/);
+  assert.match(empty, /href="https:\/\/docs\.devin\.ai\/product-guides\/automations"/);
+
+  const saved = await post(t, `/g/${G}/watch/channels`, session, {
+    _csrf: csrf,
+    auto_start: '400000000000000003',
+    anyone: '400000000000000003',
+    webhook: '400000000000000001',
+    max_acu: '8',
+    tasks_per_day: '2',
+    concurrent_tasks: '1'
+  });
+  assert.equal(saved.status, 302);
+  assert.deepEqual(t.guilds.watchChannels(G), [
+    { channelId: '400000000000000001', autoStart: false, webhook: true, anyone: false },
+    { channelId: '400000000000000003', autoStart: true, webhook: false, anyone: true }
+  ]);
+  assert.deepEqual(t.guilds.watchLimits(G), { maxAcu: 8, tasksPerDay: 2, concurrentTasks: 1 });
+  assert.equal(
+    t.guilds.auditLog(G)[0].detail,
+    'auto-start: #bug-reports; anyone: #bug-reports; webhook: #general; anyone limits: 8 ACU, 2/day, 1 at once'
+  );
+  const badLimits = await post(t, `/g/${G}/watch/channels`, session, {
+    _csrf: csrf,
+    max_acu: '0',
+    tasks_per_day: '2',
+    concurrent_tasks: '1'
+  });
+  assert.equal(badLimits.status, 400, 'limits must be at least 1');
+  assert.equal(t.guilds.watchChannels(G).length, 2);
+
+  for (const url of ['http://hooks.example.com/x', 'https://127.0.0.1/x', 'https://localhost/x', '']) {
+    const bad = await post(t, `/g/${G}/watch/webhook`, session, { _csrf: csrf, url, secret: 'x' });
+    assert.equal(bad.status, 400, url);
+  }
+  assert.equal(t.guilds.webhook(G), null);
+  const hook = 'https://hooks.example.com/api/devin/inbox-123?token=abc';
+  const ok = await post(t, `/g/${G}/watch/webhook`, session, { _csrf: csrf, url: hook, secret: 'whsec_1', include_threads: 'on' });
+  assert.equal(ok.status, 302);
+  const stored = t.guilds.webhook(G)!;
+  assert.equal(t.secrets.decrypt(stored.urlEncrypted, G), hook);
+  assert.equal(t.secrets.decrypt(stored.secretEncrypted!, G), 'whsec_1');
+  assert.deepEqual([stored.urlHint, stored.includeThreads, stored.includeBots], ['hooks.example.com', true, false]);
+  assert.doesNotMatch(JSON.stringify(t.db.prepare('select * from guild_webhook').all()), /inbox-123|whsec_1/);
+  assert.doesNotMatch(JSON.stringify(t.guilds.auditLog(G)), /inbox-123|whsec_1|token=abc/);
+  const page = await (await t.request(`/g/${G}/watch`, { headers: { cookie: session } })).text();
+  assert.match(page, /set, host hooks\.example\.com/);
+  assert.doesNotMatch(page, /inbox-123|whsec_1/);
+
+  await post(t, `/g/${G}/watch/webhook`, session, { _csrf: csrf, url: '', secret: '', include_bots: 'on' });
+  const kept = t.guilds.webhook(G)!;
+  assert.equal(t.secrets.decrypt(kept.urlEncrypted, G), hook, 'an empty URL keeps the current one');
+  assert.equal(t.secrets.decrypt(kept.secretEncrypted!, G), 'whsec_1', 'an empty secret keeps the current one');
+  assert.deepEqual([kept.includeThreads, kept.includeBots], [false, true]);
+
+  t.state.member = SETTINGS_ONLY;
+  t.guilds.setRoleRules(G, [{ roleId: SETTINGS_ROLE, permissions: ['settings'], limits: NO_LIMITS }]);
+  const view = await (await t.request(`/g/${G}/watch`, { headers: { cookie: session } })).text();
+  assert.match(view, /<fieldset disabled>/);
+  assert.doesNotMatch(view, /watch\/webhook\/remove/);
+  const before = t.guilds.auditLog(G).length;
+  assert.equal((await post(t, `/g/${G}/watch/channels`, session, { _csrf: csrf, max_acu: '5', tasks_per_day: '3', concurrent_tasks: '1' })).status, 403);
+  assert.equal((await post(t, `/g/${G}/watch/webhook`, session, { _csrf: csrf, url: 'https://evil.example.com/' })).status, 403);
+  assert.equal((await post(t, `/g/${G}/watch/webhook/remove`, session, { _csrf: csrf })).status, 403);
+  assert.equal(t.guilds.watchChannels(G).length, 2);
+  assert.equal(t.guilds.webhook(G)!.urlHint, 'hooks.example.com');
+  assert.equal(t.guilds.auditLog(G).length, before);
+
+  t.state.member = { id: USER, name: 'Dev', roleIds: [G], isAdmin: true, canManageGuild: true };
+  assert.equal((await post(t, `/g/${G}/watch/webhook/remove`, session, { _csrf: csrf })).status, 302);
+  assert.equal(t.guilds.webhook(G), null);
+  assert.equal(t.guilds.auditLog(G)[0].action, 'webhook.remove');
+});
+
 test('members who are not Administrators only change Channels tab entries they can view', async () => {
   const t = setup();
   const { session, csrf } = await signIn(t);

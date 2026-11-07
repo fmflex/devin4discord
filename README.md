@@ -35,6 +35,29 @@ Tasks are created by the server's Devin service user and tagged `discord`, `disc
 
 Until a server saves a Devin key, every trigger there gets a private reply pointing to the setup UI. Every settings change and task start is written to the server's **Audit log**.
 
+## Watched channels
+
+The **Watched channels** page lets the bot act on new messages without anyone asking it. Only Discord Administrators can change it, and every change is audited.
+
+- **Auto-start:** every new top-level message in the channel starts a task, as if it had mentioned the bot. The thread opens on the message. In a forum, every new post starts a task, with its title and text, and the post itself becomes the task thread, so replies in it go to Devin. The author needs **Start tasks**, and their role's limits apply. Members without it are ignored quietly, unless you also tick **Anyone**: then they can start tasks in that channel too, within limits set on the same page (ACU cap per task, tasks per member per day, tasks running at once; defaults 5 / 3 / 1). Bots, private threads and messages starting with `//` never start tasks. A watched channel counts as allowed even when it isn't ticked on the Channels page.
+- **Webhook:** every new message in the channel is POSTed as JSON to the server's webhook URL. The secret, if set, goes in the `X-Webhook-Secret` header. That's what a [Devin Automation](https://docs.devin.ai/product-guides/automations) webhook trigger checks, so paste in its URL and secret to run an automation on every channel update. The body looks like this:
+
+  ```json
+  {
+    "type": "message.created",
+    "guild": { "id": "…", "name": "…" },
+    "channel": { "id": "…", "name": "feedback", "parentId": null, "isThread": false },
+    "message": {
+      "id": "…", "link": "https://discord.com/channels/…", "content": "…",
+      "author": { "id": "…", "name": "…", "bot": false },
+      "attachments": [{ "filename": "…", "url": "…" }],
+      "createdAt": "2026-11-07T00:00:00.000Z"
+    }
+  }
+  ```
+
+  The bot's own messages and private threads are never sent, so a Devin session posting through MCP can't loop. Messages in threads, and messages from other bots and Discord webhooks, are only sent when you turn them on. The URL must be https on a public host. It's checked again at connect time, so a host that resolves to a private, loopback or link-local address is refused. Redirects aren't followed, each call times out after 5 seconds, and at most 4 calls per server run at once; messages beyond that are dropped. The URL and secret are stored encrypted, and only the host is shown. Message text is written by members, so the automation should treat it as untrusted.
+
 ## Devin MCP server
 
 Each server can give Devin an MCP server, so that during a task Devin can read and post in Discord itself, without waiting for the bot to forward messages. Turn it on from the **MCP** page:

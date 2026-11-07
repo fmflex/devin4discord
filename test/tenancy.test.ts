@@ -386,7 +386,13 @@ function incoming(
   t: ReturnType<typeof botSetup>,
   who: MemberSnapshot,
   content: string,
-  overrides: { channel?: { id: string; parentId: string | null; isPrivate?: boolean }; id?: string; isReply?: boolean } = {}
+  overrides: {
+    channel?: { id: string; parentId: string | null; isPrivate?: boolean };
+    id?: string;
+    isReply?: boolean;
+    isThreadStarter?: boolean;
+    threadTitle?: string;
+  } = {}
 ) {
   const limits: number[] = [];
   const outcome = t.bot.handleMessage({
@@ -396,6 +402,8 @@ function incoming(
     message: { ...message, id: overrides.id ?? `m-${Math.random()}`, authorId: who.id, content },
     botUserId: BOT,
     isReply: overrides.isReply ?? false,
+    isThreadStarter: overrides.isThreadStarter,
+    threadTitle: overrides.threadTitle,
     loadContext: async (limit) => {
       limits.push(limit);
       return { repliedTo: null, recent: [{ ...message, authorName: 'Other', content: 'earlier' }] };
@@ -463,6 +471,52 @@ test('mentions are gated by start_tasks and the per-role limits', async () => {
   t.guilds.setChannels(G, ['c2'], null);
   const elsewhere = await incoming(t, member({ isAdmin: true }), `<@${BOT}> x`).outcome;
   assert.equal(elsewhere.action === 'denied' && elsewhere.reason, 'channel');
+});
+
+test('watched channels start tasks without a mention, only for members allowed to start tasks', async () => {
+  const t = botSetup();
+  t.configure();
+  const helper = member({ id: '2', roleIds: [G, HELPER] });
+  assert.deepEqual(await incoming(t, helper, 'the rotation skips Shank').outcome, { action: 'ignored' });
+  t.guilds.setWatchChannels(G, [{ channelId: 'c1', autoStart: true, webhook: false, anyone: false }]);
+  t.guilds.setChannels(G, ['c2'], 'c2');
+  assert.deepEqual(await incoming(t, member({ id: '1' }), 'not allowed to start').outcome, { action: 'ignored' });
+  const started = await incoming(t, helper, 'the rotation skips Shank', { id: 'm-auto' }).outcome;
+  assert.equal(started.action, 'started');
+  assert.deepEqual(t.threadsOnMessage.map((x) => x.messageId), ['m-auto'], 'on the message, not the task channel');
+  assert.match(t.started[0].prompt, /\n\nthe rotation skips Shank\n/);
+  assert.equal(t.started[0].maxAcu, 5);
+  const limited = await incoming(t, helper, 'another one').outcome;
+  assert.equal(limited.action === 'denied' && limited.reason, 'limit');
+  const reply = await incoming(t, helper, 'a reply in a thread', { channel: { id: 't1', parentId: 'c1' } }).outcome;
+  assert.deepEqual(reply, { action: 'ignored' }, 'thread messages that are not a forum post start nothing');
+  assert.equal(t.started.length, 1);
+});
+
+test('a new post in a watched forum becomes the task thread and its replies go to Devin', async () => {
+  const t = botSetup();
+  t.configure();
+  t.guilds.setWatchChannels(G, [{ channelId: 'forum', autoStart: true, webhook: false, anyone: false }]);
+  const admin = member({ isAdmin: true });
+  const post = { id: 'post-1', parentId: 'forum' };
+  const privatePost = await incoming(t, admin, 'secret', {
+    channel: { ...post, id: 'post-0', isPrivate: true },
+    id: 'post-0',
+    isThreadStarter: true
+  }).outcome;
+  assert.deepEqual(privatePost, { action: 'ignored' });
+  const started = await incoming(t, admin, 'Steps: pull at 24', {
+    channel: post,
+    id: 'post-1',
+    isThreadStarter: true,
+    threadTitle: 'Shank used before Sinister Strike'
+  }).outcome;
+  assert.equal(started.action === 'started' && started.threadId, 'post-1');
+  assert.equal(t.taskThreads.length + t.threadsOnMessage.length, 0, 'no new thread is opened');
+  assert.match(t.started[0].prompt, /Shank used before Sinister Strike\n\nSteps: pull at 24/);
+  assert.ok(t.sent.some((x) => x.channelId === 'post-1' && /Devin is on it/.test(x.content)));
+  assert.equal((await incoming(t, admin, 'more detail', { channel: post }).outcome).action, 'forwarded');
+  assert.deepEqual(t.forwarded.length, 1);
 });
 
 function seedTask(t: ReturnType<typeof botSetup>, taskId: string, threadId: string, guildId = G, openerId = '7') {

@@ -34,6 +34,10 @@ export type IncomingMessage = {
   message: ForwardedMessage & { id: string };
   botUserId: string;
   isReply: boolean;
+  /** The first message of a thread (in a forum: the post itself), whose ID is the thread's. */
+  isThreadStarter?: boolean;
+  /** A forum post's title, sent along with an auto-started post. */
+  threadTitle?: string;
   loadContext: (limit: number) => Promise<MentionContext>;
 };
 
@@ -52,6 +56,10 @@ type StartInput =
       message: ForwardedMessage & { id: string };
       text: string;
       loadContext: (limit: number) => Promise<MentionContext>;
+      /** Started by a watched channel, not a mention: on the message itself, or in the forum post it opened. */
+      autoStart?: 'message' | 'thread';
+      /** The watched channel lets members without Start tasks start tasks, within its limits. */
+      anyone?: boolean;
     };
 
 const CANT_CONTROL =
@@ -110,6 +118,22 @@ export class Bot {
     return this.tasks.byThread(threadId) !== null;
   }
 
+  /**
+   * How a message here would start a task on its own: top-level messages in an auto-start channel,
+   * or a new post in an auto-start forum. Private threads never auto-start.
+   */
+  autoStarts(
+    guildId: string,
+    channel: ChannelRef,
+    isThreadStarter: boolean
+  ): { mode: 'message' | 'thread'; anyone: boolean } | null {
+    if (channel.isPrivate) return null;
+    if (channel.parentId && !isThreadStarter) return null;
+    const watched = this.guilds.watchChannel(guildId, channel.parentId ?? channel.id);
+    if (!watched?.autoStart) return null;
+    return { mode: channel.parentId ? 'thread' : 'message', anyone: watched.anyone };
+  }
+
   startFromMessage(
     guildId: string,
     member: MemberSnapshot,
@@ -155,7 +179,7 @@ export class Bot {
       if (outcome.reason === 'not_task') return { action: 'ignored' };
       return { action: 'denied', reason: outcome.reason, reply: outcome.reply };
     }
-    if (!parsed.mentioned) return { action: 'ignored' };
+    if (!parsed.mentioned) return this.autoStart(input);
     if (parsed.command) {
       return { action: 'denied', reason: 'not_task', reply: `Use \`${parsed.command}\` inside a task thread.` };
     }
@@ -173,6 +197,35 @@ export class Bot {
       loadContext: input.loadContext
     });
     if (!outcome.ok) return { action: 'denied', reason: outcome.reason, reply: outcome.reply };
+    const threadId = this.tasks.bySourceMessage(message.id)?.threadId ?? '';
+    return { action: 'started', threadId, reply: outcome.reply };
+  }
+
+  /**
+   * A message in a watched channel. Members allowed to start tasks start one within their limits, and in an
+   * "anyone" channel everyone else does within the channel limits; others are ignored quietly.
+   */
+  private async autoStart(input: IncomingMessage): Promise<MessageOutcome> {
+    const { guildId, member, channel, message } = input;
+    const watched = this.autoStarts(guildId, channel, input.isThreadStarter === true);
+    if (!watched) return { action: 'ignored' };
+    const { mode, anyone } = watched;
+    const title = mode === 'thread' ? input.threadTitle?.trim() ?? '' : '';
+    const text = [title, message.content.trim()].filter(Boolean).join('\n\n');
+    if (!text && !message.attachments.length) return { action: 'ignored' };
+    const outcome = await this.start(guildId, member, channel, {
+      kind: 'mention',
+      message,
+      text,
+      loadContext: input.loadContext,
+      autoStart: mode,
+      anyone
+    });
+    if (!outcome.ok) {
+      return outcome.reason === 'limit'
+        ? { action: 'denied', reason: outcome.reason, reply: outcome.reply }
+        : { action: 'ignored' };
+    }
     const threadId = this.tasks.bySourceMessage(message.id)?.threadId ?? '';
     return { action: 'started', threadId, reply: outcome.reply };
   }
@@ -296,10 +349,20 @@ export class Bot {
     channel: ChannelRef,
     request: StartInput
   ): Promise<Outcome> {
-    const denied = this.check(guildId, member, ['start_tasks']);
-    if (denied) return denied;
+    const rules = this.guilds.roleRules(guildId);
+    const canStart = hasPermission(member, rules, 'start_tasks');
+    const anyone = request.kind === 'mention' && request.autoStart !== undefined && request.anyone === true;
+    if (!anyone || canStart) {
+      const denied = this.check(guildId, member, ['start_tasks']);
+      if (denied) return denied;
+    } else if (!this.isConfigured(guildId)) {
+      return deny('unconfigured', unconfiguredReply(this.publicUrl));
+    }
     const allowed = this.guilds.allowedChannels(guildId);
+    // An Administrator picked the watched channel, so it counts as allowed.
+    const watched = request.kind === 'mention' && request.autoStart;
     if (
+      !watched &&
       allowed.length &&
       !allowed.includes(channel.id) &&
       !(channel.parentId && allowed.includes(channel.parentId))
@@ -312,7 +375,7 @@ export class Bot {
         return { ok: true, started: false, reply: `That message already has a task: <#${existing.threadId}>` };
       }
     }
-    const limits = startLimits(member, this.guilds.roleRules(guildId));
+    const limits = canStart ? startLimits(member, rules) : this.guilds.watchLimits(guildId);
     const pendingKey = `${guildId}:${member.id}`;
     const pending = this.pendingStarts.get(pendingKey) ?? 0;
     if (
@@ -363,8 +426,10 @@ export class Bot {
     let full: StartRequest;
     if (request.kind === 'mention') {
       // Thread on the mention itself unless tasks go to a separate channel or it's already in a thread.
+      // Auto-started tasks stay where they were posted: on the message, or in the forum post.
       const threadOnMessage =
-        !channel.parentId && (!settings?.taskChannelId || settings.taskChannelId === channel.id);
+        request.autoStart === 'message' ||
+        (!request.autoStart && !channel.parentId && (!settings?.taskChannelId || settings.taskChannelId === channel.id));
       const context = await request.loadContext(settings?.contextMessages ?? DEFAULT_CONTEXT_MESSAGES);
       full = {
         ...common,
@@ -373,7 +438,8 @@ export class Bot {
         message: request.message,
         text: request.text,
         context,
-        threadOnMessage
+        threadOnMessage,
+        ...(request.autoStart === 'thread' ? { channelId: channel.id, inThread: true } : {})
       };
     } else {
       full = { ...common, ...request };

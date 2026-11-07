@@ -109,6 +109,17 @@ const SECTIONS: Section[] = [
       <p>The bot's Discord role still decides what it can actually see. If it can't view a channel in Discord, nothing here changes that.</p>`
   },
   {
+    id: 'watched-channels',
+    title: 'Watched channels',
+    body: html`<p>Only Discord Administrators can change these. Every change is in the audit log.</p>
+      <ul class="steps">
+        <li><strong>Auto-start:</strong> every new top-level message in the channel starts a task, no @Devin needed, with the thread on the message. In a forum, every new post starts one and the post becomes the task thread. The author needs <strong>Start tasks</strong> and their role's limits apply; anyone else is ignored quietly.</li>
+        <li><strong>Anyone:</strong> with Auto-start, members without Start tasks may start tasks in that channel too, within the limits on the same page (ACU per task, tasks per day, running at once).</li>
+        <li><strong>Webhook:</strong> every new message is POSTed as JSON to the server's webhook, with the secret in <code>X-Webhook-Secret</code>. Paste a Devin Automation's webhook URL and secret there to run it on every channel update. The bot's own messages and private threads are never sent; threads and other bots only when turned on.</li>
+      </ul>
+      <p>${doc(DOCS.automations, 'Devin docs: Automations')}</p>`
+  },
+  {
     id: 'devin-settings',
     title: 'Devin settings',
     body: html`<ul class="steps">

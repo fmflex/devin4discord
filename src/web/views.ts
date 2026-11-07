@@ -2,16 +2,16 @@ import { createHash } from 'node:crypto';
 import { html, raw } from 'hono/html';
 import type { ChannelInfo, RoleInfo } from '../directory.ts';
 import { DEFAULT_INSTRUCTIONS } from '../format.ts';
-import { MAX_CONTEXT_MESSAGES, type AuditEntry, type McpModes } from '../guilds.ts';
+import { MAX_CONTEXT_MESSAGES, type AuditEntry, type McpModes, type WatchChannel } from '../guilds.ts';
 import { RETENTION_DAYS } from '../retention.ts';
 
 export type MentionSettings = { contextMessages: number; mentionOnlyReplies: boolean };
-import { ADMIN_ROLE, PERMISSIONS, PERMISSION_LABELS, adminRule, type RoleRule } from '../permissions.ts';
+import { ADMIN_ROLE, PERMISSIONS, PERMISSION_LABELS, adminRule, type Limits, type RoleRule } from '../permissions.ts';
 import type { WebSession } from './sessions.ts';
 
 type Html = ReturnType<typeof html>;
 
-export type GuildTab = 'devin' | 'permissions' | 'channels' | 'mcp' | 'audit';
+export type GuildTab = 'devin' | 'permissions' | 'channels' | 'watch' | 'mcp' | 'audit';
 
 export type PageOptions = {
   title: string;
@@ -38,6 +38,7 @@ export const DOCS = {
   createSession: 'https://docs.devin.ai/api-reference/v3/sessions/post-organizations-sessions',
   billing: 'https://docs.devin.ai/admin/billing',
   mcp: 'https://docs.devin.ai/work-with-devin/mcp',
+  automations: 'https://docs.devin.ai/product-guides/automations',
   discordIds: 'https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID'
 };
 
@@ -67,6 +68,7 @@ export function layout(page: PageOptions) {
     ['devin', 'Devin'],
     ['permissions', 'Permissions'],
     ['channels', 'Channels'],
+    ['watch', 'Watched channels'],
     ['mcp', 'MCP'],
     ['audit', 'Audit log']
   ];
@@ -511,6 +513,103 @@ export function channelsPage(
       <p class="muted small">For busy task threads. When off, every message from members allowed to reply is forwarded.</p>
       <button class="button">Save channels</button>
     </form>`
+  });
+}
+
+export const MAX_WATCH_ACU = 1000;
+export const MAX_WATCH_COUNT = 100;
+
+export type WebhookView = { hint: string; hasSecret: boolean; includeThreads: boolean; includeBots: boolean };
+
+export function watchPage(
+  session: WebSession,
+  guild: { id: string; name: string },
+  channels: ChannelInfo[],
+  watch: WatchChannel[],
+  limits: Limits,
+  webhook: WebhookView | null,
+  notice: PageOptions['notice'],
+  canEdit: boolean,
+  query = ''
+) {
+  const autoSet = new Set(watch.filter((entry) => entry.autoStart).map((entry) => entry.channelId));
+  const hookSet = new Set(watch.filter((entry) => entry.webhook).map((entry) => entry.channelId));
+  const anyoneSet = new Set(watch.filter((entry) => entry.anyone).map((entry) => entry.channelId));
+  const shown = matchChannels(channels, query);
+  const groups = byCategory(shown);
+  const action = `/g/${guild.id}/watch`;
+  const ticked = (list: ChannelInfo[]) =>
+    list.filter((channel) => autoSet.has(channel.id) || hookSet.has(channel.id)).length;
+  return layout({
+    title: `${guild.name} · Watched channels`,
+    session,
+    guild: { ...guild, tab: 'watch' },
+    notice,
+    body: html`<section class="card wide">
+      <h2>Watched channels</h2>
+      <p class="muted"><strong>Auto-start</strong>: every new message in the channel starts a Devin task, no @Devin needed. In a forum, every new post does, and the post becomes the task thread.
+        <strong>Webhook</strong>: every new message in the channel is sent to the webhook below, e.g. to trigger a Devin Automation.</p>
+      ${canEdit ? '' : ADMIN_ONLY_NOTE}
+      ${channelSearchForm(action)}
+      <form method="post" action="${action}/channels">
+        ${csrfField(session)}
+        ${channelTools(action, query, shown.length, channels.length)}
+        ${editable(canEdit, html`${listScope(query, shown)}<table class="grid">
+          <thead><tr><th>Channel</th>
+            <th>Auto-start ${help('auto-start', html`<p>Each new top-level message starts a task, as if it had @mentioned Devin; the task thread opens on the message. In a forum, each new post starts one, with its title and text, and replies in the post go to Devin.</p><p>The author still needs <strong>Start tasks</strong> on the Permissions page, and their role's ACU cap and task limits apply. Messages from anyone else are ignored quietly. To take requests from everyone, give @everyone Start tasks with tight limits.</p><p>Bots, private threads and messages starting with <code>//</code> never start tasks. A watched channel counts as allowed even if it isn't ticked on the Channels tab.</p>`)}</th>
+            <th>Anyone ${help('anyone can start', html`<p>Only with Auto-start. Members who don't have <strong>Start tasks</strong> may start tasks here too, within the limits below. Members who have it keep their role's limits.</p><p>Every member who can post here can then spend ACUs, so keep the limits tight.</p>`)}</th>
+            <th>Webhook ${help('the channel webhook', html`<p>Each new message in the channel is POSTed as JSON to the webhook below. Private threads are never sent, and neither are the bot's own messages, so a Devin session posting through MCP can't loop.</p><p>Message text is written by members: whatever reads it should treat it as untrusted.</p>`, true)}</th>
+          </tr></thead>
+            ${[...groups].map(
+              ([category, list]) => html`<tbody>${categoryRow(category, 4, ticked(list))}
+                ${list.map(
+                  (channel) => html`<tr>
+                    <td>${channel.kind === 'text' ? html`<span class="muted">#</span> ` : ''}${channel.name}${channel.kind === 'text' ? '' : html` <span class="muted small">${KIND_LABEL[channel.kind]}</span>`}</td>
+                    <td class="center"><input type="checkbox" name="auto_start" value="${channel.id}" aria-label="Auto-start tasks in ${channel.name}" ${autoSet.has(channel.id) ? 'checked' : ''}></td>
+                    <td class="center"><input type="checkbox" name="anyone" value="${channel.id}" aria-label="Anyone can start tasks in ${channel.name}" ${anyoneSet.has(channel.id) ? 'checked' : ''}></td>
+                    <td class="center"><input type="checkbox" name="webhook" value="${channel.id}" aria-label="Send ${channel.name} to the webhook" ${hookSet.has(channel.id) ? 'checked' : ''}></td>
+                  </tr>`
+                )}</tbody>`
+            )}
+        </table>
+        ${query && !shown.length ? html`<p class="muted small">No channels match "${query}".</p>` : ''}
+        <h3>Limits for "Anyone" channels</h3>
+        <p class="muted small">For members without Start tasks, per member, across every channel ticked under Anyone.</p>
+        <div class="row">
+          <label>Max ACU per task <input class="narrow" type="number" name="max_acu" min="1" max="${MAX_WATCH_ACU}" value="${limits.maxAcu ?? ''}" required></label>
+          <label>Tasks per day <input class="narrow" type="number" name="tasks_per_day" min="1" max="${MAX_WATCH_COUNT}" value="${limits.tasksPerDay ?? ''}" required></label>
+          <label>Running at once <input class="narrow" type="number" name="concurrent_tasks" min="1" max="${MAX_WATCH_COUNT}" value="${limits.concurrentTasks ?? ''}" required></label>
+        </div>
+        ${hookSet.size && !webhook ? html`<p class="muted small">No webhook is set yet, so nothing is sent.</p>` : ''}
+        <button class="button">Save channels</button>`)}
+      </form>
+    </section>
+    <form class="card" method="post" action="${action}/webhook">
+      ${csrfField(session)}
+      <h2>Webhook</h2>
+      <p class="muted">Where messages from the channels ticked under Webhook go. To start a Devin Automation, add a <strong>Webhook</strong> trigger to it in Devin and paste its URL and secret here. ${doc(DOCS.automations, 'Devin docs: Automations')}</p>
+      <p class="muted small">${webhook
+        ? html`Webhook is <strong>set, host ${webhook.hint}</strong>${webhook.hasSecret ? ', with a secret' : ', without a secret'}.`
+        : 'No webhook yet.'}</p>
+      ${editable(canEdit, html`<label>URL ${help('the webhook URL', html`<p>An https URL on a public host. The bot POSTs one JSON body per message, with <code>type</code>, <code>guild</code>, <code>channel</code> and <code>message</code> (text, author, link, attachments). It doesn't follow redirects and gives up after 5 seconds.</p><p>The URL is stored encrypted and never shown again; only its host is.</p>`)}
+          <input type="url" name="url" maxlength="2048" placeholder="${webhook ? 'Leave empty to keep the current URL' : 'https://…'}" spellcheck="false" autocomplete="off">
+        </label>
+        <label>Secret ${help('the webhook secret', html`<p>Sent in the <code>X-Webhook-Secret</code> header, which is what Devin Automation webhooks check. Stored encrypted and never shown again.</p>`)}
+          <input type="password" name="secret" maxlength="512" placeholder="${webhook?.hasSecret ? 'Leave empty to keep the current secret' : 'Optional'}" autocomplete="new-password">
+        </label>
+        <label class="check"><input type="checkbox" name="include_threads" ${webhook?.includeThreads ? 'checked' : ''}> Also send messages in threads and forum posts under a ticked channel</label>
+        <label class="check"><input type="checkbox" name="include_bots" ${webhook?.includeBots ? 'checked' : ''}> Also send messages from other bots and Discord webhooks</label>
+        <p class="muted small">When off, only top-level messages from members are sent. In a forum, posts are threads, so turn on the first option for forums.</p>
+        <button class="button">Save webhook</button>`)}
+    </form>
+    ${webhook && canEdit
+      ? html`<form class="card danger" method="post" action="${action}/webhook/remove">
+          ${csrfField(session)}
+          <h2>Remove the webhook</h2>
+          <p class="muted">Stops sending messages. The Webhook ticks are kept.</p>
+          <button class="button danger">Remove webhook</button>
+        </form>`
+      : ''}`
   });
 }
 

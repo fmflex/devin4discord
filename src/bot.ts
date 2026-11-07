@@ -1,4 +1,5 @@
-import type { Bridge, StartRequest } from './bridge.ts';
+import { randomBytes } from 'node:crypto';
+import type { Bridge, ChatButton, StartRequest } from './bridge.ts';
 import type { Attachment, Person } from './devin.ts';
 import { DEFAULT_INSTRUCTIONS, type ForwardedMessage, type MentionContext } from './format.ts';
 import { DEFAULT_CONTEXT_MESSAGES, type GuildStore } from './guilds.ts';
@@ -12,6 +13,9 @@ import type { TaskRow, TaskStore } from './store.ts';
 import { parseControlId, parseMention, type ControlAction } from './triggers.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+export const LINK_TTL_MS = 30 * 60 * 1000;
+export const LINK_CHECK_ID = 'devin:link-check';
+const DEFAULT_DEVIN_APP = 'https://app.devin.ai';
 const LIST_SIZE = 10;
 const LIST_SCAN = 50;
 
@@ -67,7 +71,7 @@ const CANT_CONTROL =
 
 /** What happened, and the text to show the member privately. */
 export type Outcome =
-  | { ok: true; reply: string; started?: boolean }
+  | { ok: true; reply: string; started?: boolean; buttons?: ChatButton[] }
   | { ok: false; reason: DenyReason; reply: string };
 
 export function unconfiguredReply(publicUrl: string) {
@@ -93,6 +97,8 @@ export class Bot {
   private readonly tasks: TaskStore;
   private readonly publicUrl: string;
   private readonly now: () => number;
+  /** `/devin link` codes waiting for their Devin session, per `guild:member`. Kept in memory only. */
+  private readonly linkCodes = new Map<string, { code: string; issuedAt: number }>();
   /** Starts that passed the limit check but whose task row isn't written yet, per `guild:member`. */
   private readonly pendingStarts = new Map<string, number>();
 
@@ -228,6 +234,97 @@ export class Bot {
     }
     const threadId = this.tasks.bySourceMessage(message.id)?.threadId ?? '';
     return { action: 'started', threadId, reply: outcome.reply };
+  }
+
+  /** Where members open Devin: the web app their server's task links point to. */
+  private devinApp(guildId: string) {
+    const url = this.bridge.recent(guildId, 1)[0]?.url;
+    try {
+      return url ? new URL(url).origin : DEFAULT_DEVIN_APP;
+    } catch {
+      return DEFAULT_DEVIN_APP;
+    }
+  }
+
+  /**
+   * `/devin link`: gives the member a one-time code to put in a Devin session they start themselves.
+   * Proving they own the account is what keeps members from running tasks as someone else.
+   */
+  link(guildId: string, member: MemberSnapshot): Outcome {
+    const denied = this.check(guildId, member, ['start_tasks']);
+    if (denied) return denied;
+    const linked = this.guilds.devin(guildId)?.userMap[member.id];
+    if (linked) {
+      return {
+        ok: true,
+        reply: `Your Discord account is linked to Devin user \`${linked}\`, so tasks you start run as you in Devin.\nTo link a different account, run \`/devin unlink\` first.`
+      };
+    }
+    const code = `D4D-${randomBytes(5).toString('hex').toUpperCase()}`;
+    this.linkCodes.set(`${guildId}:${member.id}`, { code, issuedAt: this.now() });
+    const app = this.devinApp(guildId);
+    return {
+      ok: true,
+      buttons: [{ customId: LINK_CHECK_ID, label: "I've started it, check now", style: 'secondary' }],
+      reply: [
+        '**Link your Devin account** (only you can see this)',
+        `**1.** Open Devin at ${app}, signed in as yourself, and start a new session with this prompt:`,
+        '```',
+        `Link my Discord account to devin4discord with code ${code}. Just reply "done", nothing else is needed.`,
+        '```',
+        '**2.** Come back here and click the button below. The code works for 30 minutes.',
+        '',
+        "Once linked, tasks you start from Discord are created as your Devin user and show up under your account. You can stop that Devin session after it replies. Only start it if you ran `/devin link` yourself; `/devin unlink` undoes the link."
+      ].join('\n')
+    };
+  }
+
+  /** The "check now" button under `/devin link`. */
+  async linkCheck(guildId: string, member: MemberSnapshot): Promise<Outcome> {
+    const denied = this.check(guildId, member, ['start_tasks']);
+    if (denied) return denied;
+    const key = `${guildId}:${member.id}`;
+    const pending = this.linkCodes.get(key);
+    if (!pending || this.now() - pending.issuedAt > LINK_TTL_MS) {
+      this.linkCodes.delete(key);
+      return deny('ended', 'That code has expired. Run `/devin link` to get a new one.');
+    }
+    const found = await this.bridge.findLinkSession(guildId, pending.code, pending.issuedAt);
+    // `/devin unlink` (or a new `/devin link`) while Devin was being asked cancels this check.
+    if (this.linkCodes.get(key) !== pending) {
+      return deny('ended', 'That link was cancelled. Run `/devin link` to start again.');
+    }
+    if (!found) {
+      return {
+        ok: false,
+        reason: 'empty',
+        reply: `I can't find a Devin session with code \`${pending.code}\` yet.\nMake sure you started it **in the Devin web app** (${this.devinApp(guildId)}), signed in as yourself, with the code in the first message. Then click the button again; it can take a few seconds to show up.`
+      };
+    }
+    const userMap = this.guilds.devin(guildId)?.userMap ?? {};
+    const other = Object.entries(userMap).find(([discordId, devinId]) => devinId === found.userId && discordId !== member.id);
+    if (other) {
+      this.linkCodes.delete(key);
+      return deny('forbidden', `Devin user \`${found.userId}\` is already linked to another Discord member. Ask an admin to change it on the Devin page.`);
+    }
+    this.guilds.setUserLink(guildId, member.id, found.userId);
+    this.linkCodes.delete(key);
+    this.guilds.audit(guildId, { id: member.id, name: member.name }, 'devin.link', `<@${member.id}> → ${found.userId} (proved with ${found.url})`);
+    return {
+      ok: true,
+      reply: `Linked! Your Discord account now runs tasks as Devin user \`${found.userId}\`, so they show up under your account.\nYou can stop the session you used: ${found.url}\nRun \`/devin unlink\` any time to undo.`
+    };
+  }
+
+  /** `/devin unlink`: tasks go back to being created by the server's service user. */
+  unlink(guildId: string, member: MemberSnapshot): Outcome {
+    if (!this.isConfigured(guildId)) return deny('unconfigured', unconfiguredReply(this.publicUrl));
+    this.linkCodes.delete(`${guildId}:${member.id}`);
+    const linked = this.guilds.devin(guildId)?.userMap[member.id];
+    if (!linked) return { ok: true, reply: "Your Discord account isn't linked to a Devin user." };
+    this.guilds.setUserLink(guildId, member.id, null);
+    this.guilds.audit(guildId, { id: member.id, name: member.name }, 'devin.unlink', `<@${member.id}> → ${linked}`);
+    return { ok: true, reply: `Unlinked from Devin user \`${linked}\`. New tasks are created by the server's Devin service user again.` };
   }
 
   /** `/devin stop|sleep` inside a task thread. */

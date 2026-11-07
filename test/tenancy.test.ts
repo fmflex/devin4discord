@@ -154,6 +154,7 @@ function botSetup() {
   let next = 1;
   let gate: Promise<void> | null = null;
   let failStarts = false;
+  const linkSessions = new Map<string, { userId: string; sessionId: string; url: string }>();
   const devin: DevinApi = {
     async startTask(input) {
       if (gate) await gate;
@@ -176,6 +177,9 @@ function botSetup() {
     },
     async sleep(taskId) {
       controls.push(`sleep ${taskId}`);
+    },
+    async findLinkSession(code) {
+      return linkSessions.get(code) ?? null;
     },
     async unarchive(taskId) {
       controls.push(`unarchive ${taskId}`);
@@ -235,7 +239,8 @@ function botSetup() {
         release();
       };
     },
-    failStarts: (fail: boolean) => (failStarts = fail)
+    failStarts: (fail: boolean) => (failStarts = fail),
+    linkSessions
   };
 }
 
@@ -517,6 +522,54 @@ test('a new post in a watched forum becomes the task thread and its replies go t
   assert.ok(t.sent.some((x) => x.channelId === 'post-1' && /Devin is on it/.test(x.content)));
   assert.equal((await incoming(t, admin, 'more detail', { channel: post }).outcome).action, 'forwarded');
   assert.deepEqual(t.forwarded.length, 1);
+});
+
+test('/devin link links a member only after they prove the Devin account is theirs', async () => {
+  const t = botSetup();
+  t.configure();
+  assert.equal(t.bot.link(G, member({ id: '1' })).ok, false, 'needs Start tasks');
+  const helper = member({ id: '2', roleIds: [G, HELPER] });
+  const started = t.bot.link(G, helper);
+  assert.ok(started.ok && started.buttons?.length);
+  const code = /D4D-[0-9A-F]{10}/.exec(started.reply)![0];
+  assert.match(started.reply, /https:\/\/app\.devin\.ai/);
+  const notYet = await t.bot.linkCheck(G, helper);
+  assert.equal(!notYet.ok && notYet.reason, 'empty');
+  assert.match(notYet.reply, new RegExp(code));
+  assert.equal(t.guilds.devin(G)!.userMap['2'], undefined);
+
+  t.linkSessions.set(code, { userId: 'user-helper', sessionId: 'devin-1', url: 'https://app.devin.ai/sessions/1' });
+  const before = t.guilds.devin(G)!.updatedAt;
+  assert.equal((await t.bot.linkCheck(G, helper)).ok, true);
+  assert.equal(t.guilds.devin(G)!.userMap['2'], 'user-helper');
+  assert.ok(t.guilds.devin(G)!.updatedAt > before, 'the cached Devin client is refreshed');
+  assert.equal(t.guilds.auditLog(G)[0].action, 'devin.link');
+  assert.match(t.bot.link(G, helper).reply, /already|linked to Devin user `user-helper`/);
+
+  const mod = member({ id: '3', roleIds: [G, MOD] });
+  const other = t.bot.link(G, mod);
+  const otherCode = /D4D-[0-9A-F]{10}/.exec(other.reply)![0];
+  t.linkSessions.set(otherCode, { userId: 'user-helper', sessionId: 'devin-2', url: 'u' });
+  const taken = await t.bot.linkCheck(G, mod);
+  assert.equal(!taken.ok && taken.reason, 'forbidden', 'one Devin user per Discord member');
+
+  t.bot.link(G, member({ id: '4', roleIds: [G, HELPER] }));
+  t.advance(31 * 60 * 1000);
+  const expired = await t.bot.linkCheck(G, member({ id: '4', roleIds: [G, HELPER] }));
+  assert.equal(!expired.ok && expired.reason, 'ended');
+
+  const racer = member({ id: '5', roleIds: [G, HELPER] });
+  const raceCode = /D4D-[0-9A-F]{10}/.exec(t.bot.link(G, racer).reply)![0];
+  t.linkSessions.set(raceCode, { userId: 'user-racer', sessionId: 'devin-3', url: 'u' });
+  const checking = t.bot.linkCheck(G, racer);
+  t.bot.unlink(G, racer);
+  const cancelled = await checking;
+  assert.equal(!cancelled.ok && cancelled.reason, 'ended', 'an unlink during the check wins');
+  assert.equal(t.guilds.devin(G)!.userMap['5'], undefined);
+
+  assert.match(t.bot.unlink(G, helper).reply, /Unlinked from Devin user `user-helper`/);
+  assert.equal(t.guilds.devin(G)!.userMap['2'], undefined);
+  assert.equal(t.guilds.auditLog(G)[0].action, 'devin.unlink');
 });
 
 function seedTask(t: ReturnType<typeof botSetup>, taskId: string, threadId: string, guildId = G, openerId = '7') {

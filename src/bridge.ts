@@ -246,6 +246,12 @@ export class Bridge {
     return true;
   }
 
+  findLinkSession(guildId: string, code: string, since: number) {
+    const devin = this.devin(guildId);
+    if (!devin) throw new Error('Devin is not set up in this server.');
+    return devin.findLinkSession(code, since);
+  }
+
   recent(guildId: string, limit = 10) {
     return this.store.recent(guildId, limit);
   }

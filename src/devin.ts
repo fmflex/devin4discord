@@ -446,7 +446,7 @@ export class DevinClient {
    */
   async findLinkSession(code: string, since: number): Promise<{ userId: string; sessionId: string; url: string } | null> {
     const params = new URLSearchParams({
-      first: '50',
+      first: '200',
       created_after: String(Math.floor(since / 1000) - 60),
       origins: 'webapp'
     });

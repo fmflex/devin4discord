@@ -131,7 +131,7 @@ test('findLinkSession only accepts the code in the first message of a web app se
   const found = await adapter(impl).findLinkSession('D4D-1', 1_700_000_000_000);
   assert.deepEqual(found, { userId: 'user-me', sessionId: 'devin-own', url: 'https://app.devin.ai/sessions/own' });
   const query = new URL(calls[0].url).searchParams;
-  assert.deepEqual([query.get('created_after'), query.get('origins')], ['1699999940', 'webapp']);
+  assert.deepEqual([query.get('created_after'), query.get('origins'), query.get('first')], ['1699999940', 'webapp', '200']);
   assert.ok(!calls.some((call) => /devin-api|devin-slack/.test(call.url)), 'service-user and non-web sessions are skipped');
 });
 

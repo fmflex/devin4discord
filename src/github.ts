@@ -143,20 +143,28 @@ export class GitHubClient {
 
   private async requireChecksPassed(pr: PrRef, sha: string) {
     const base = `/repos/${pr.owner}/${pr.repo}/commits/${sha}`;
-    const [runs, status] = await Promise.all([
-      this.request<{ check_runs: CheckRun[] }>(`${base}/check-runs?per_page=100`),
-      this.request<{ state: string; total_count: number; statuses: { context: string; state: string }[] }>(
-        `${base}/status`
-      )
-    ]);
-    const running = runs.check_runs.filter((run) => run.status !== 'completed').map((run) => run.name);
-    const failed = runs.check_runs
-      .filter((run) => run.status === 'completed' && !PASSED.has(run.conclusion ?? ''))
-      .map((run) => run.name);
+    const status = await this.request<{ state: string; total_count: number; statuses: { context: string; state: string }[] }>(
+      `${base}/status?per_page=100`
+    );
+    const runs: CheckRun[] = [];
+    for (let page = 1; ; page++) {
+      const batch = await this.request<{ total_count: number; check_runs: CheckRun[] }>(
+        `${base}/check-runs?per_page=100&page=${page}`
+      );
+      runs.push(...batch.check_runs);
+      if (!batch.check_runs.length || runs.length >= batch.total_count) break;
+    }
+    const running = runs.filter((run) => run.status !== 'completed').map((run) => run.name);
+    const failed = runs.filter((run) => run.status === 'completed' && !PASSED.has(run.conclusion ?? '')).map((run) => run.name);
     for (const item of status.statuses) {
       if (item.state === 'pending') running.push(item.context);
       else if (item.state !== 'success') failed.push(item.context);
     }
+    // `state` covers every status, including any beyond the first page.
+    if (status.total_count && !failed.length && (status.state === 'failure' || status.state === 'error')) {
+      failed.push('commit statuses');
+    }
+    if (status.total_count && !running.length && status.state === 'pending') running.push('commit statuses');
     if (failed.length) throw new Error(`Checks failed on ${prUrl(pr)}: ${failed.join(', ')}.`);
     if (running.length) throw new Error(`Checks are still running on ${prUrl(pr)}: ${running.join(', ')}. Try again when they pass.`);
   }

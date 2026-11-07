@@ -857,16 +857,23 @@ test('GitHubClient.merge only merges an open PR whose checks all passed, pinned 
     if (url.endsWith('/pulls/5')) {
       return json({ title: 'T', html_url: 'https://github.com/o/r/pull/5', state: 'open', merged: false, mergeable: true, head: { sha: 'abc' } });
     }
-    if (url.includes('/check-runs')) return json({ check_runs: checks });
-    if (url.endsWith('/status')) return json({ state: 'pending', total_count: 0, statuses: [] });
+    if (url.includes('/check-runs')) {
+      // One check per page, so every page has to be read.
+      const page = Number(new URL(url).searchParams.get('page'));
+      return json({ total_count: checks.length, check_runs: checks.slice(page - 1, page) });
+    }
+    if (url.includes('/status?')) return json({ state: 'pending', total_count: 0, statuses: [] });
     if (url.endsWith('/repos/o/r')) return json({ allow_merge_commit: false, allow_squash_merge: true });
     if (url.endsWith('/merge')) return json({ merged: true });
     return new Response('{}', { status: 404 });
   }) as typeof fetch;
   const client = new GitHubClient('token', fetchImpl, async () => {});
   await assert.rejects(client.merge(pr), /still running.*ci/);
-  checks = [{ name: 'ci', status: 'completed', conclusion: 'failure' }];
-  await assert.rejects(client.merge(pr), /Checks failed.*ci/);
+  checks = [
+    { name: 'ci', status: 'completed', conclusion: 'success' },
+    { name: 'lint', status: 'completed', conclusion: 'failure' }
+  ];
+  await assert.rejects(client.merge(pr), /Checks failed.*lint/);
   assert.ok(!calls.some((c) => c.method === 'PUT'));
   checks = [{ name: 'ci', status: 'completed', conclusion: 'success' }];
   assert.deepEqual(await client.merge(pr), { title: 'T', url: 'https://github.com/o/r/pull/5', method: 'squash' });

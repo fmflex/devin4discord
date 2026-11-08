@@ -87,8 +87,11 @@ export interface DiscordReader {
   react(channelId: string, messageId: string, emoji: string): Promise<void>;
   /** Removes the bot's own reaction. */
   unreact(channelId: string, messageId: string, emoji: string): Promise<void>;
-  /** Edits a plain message the bot posted; `buttons` replaces its link buttons when given. */
-  edit(channelId: string, messageId: string, edit: { content: string; buttons?: LinkButton[] }): Promise<OwnChange>;
+  /**
+   * Edits a plain message the bot posted; `buttons` replaces its link buttons when given.
+   * With `postStarter`, the first message of a forum post the bot started may be edited too.
+   */
+  edit(channelId: string, messageId: string, edit: { content: string; buttons?: LinkButton[]; postStarter?: boolean }): Promise<OwnChange>;
   /** Deletes a message the bot posted. */
   remove(channelId: string, messageId: string): Promise<Exclude<OwnChange, 'card'>>;
   /** Opens a public thread in a text channel, on `messageId` when given; null when that message isn't there. */
@@ -266,7 +269,8 @@ export const TOOLS = [
     name: 'edit_message',
     description:
       'Replace the text of a message the bot posted, in your task thread or a channel you may post in, e.g. to keep one progress message up to date. ' +
-      "Files stay. Pass buttons to replace its link buttons ([] removes them).",
+      "Files stay. Pass buttons to replace its link buttons ([] removes them). " +
+      "To edit a forum post you started, pass the post's ID as both channel_id and message_id.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -742,7 +746,7 @@ export function createMcpHandler(deps: McpDeps) {
       );
     }
     const attached = files.length ? ` and ${files.length} file${files.length === 1 ? '' : 's'}` : '';
-    return `Started forum post ${threadId} with ${ids.length} message${ids.length === 1 ? '' : 's'}${attached}: ${ids.join(', ')}. Reply in it with post_to_channel and channel_id ${threadId}.`;
+    return `Started forum post ${threadId} with ${ids.length} message${ids.length === 1 ? '' : 's'}${attached}: ${ids.join(', ')}. Reply in it with post_to_channel and channel_id ${threadId}; edit its first message with edit_message, passing ${threadId} as channel_id and message_id.`;
   }
 
   async function call(guildId: string, name: string, args: ToolArgs): Promise<string> {
@@ -792,7 +796,8 @@ export function createMcpHandler(deps: McpDeps) {
         const messageId = snowflake(args, 'message_id');
         const content = str(args, 'content');
         if (content.length > MAX_EDIT_CHARS) throw new ToolError(`content is limited to ${MAX_EDIT_CHARS} characters for an edit.`);
-        return ownChange(await deps.reader.edit(channelId, messageId, { content, buttons: buttonList(args) }), `Edited message ${messageId}.`);
+        const edit = { content, buttons: buttonList(args), postStarter: !task };
+        return ownChange(await deps.reader.edit(channelId, messageId, edit), `Edited message ${messageId}.`);
       }
       case 'delete_message': {
         const { channelId } = await target(guildId, args);

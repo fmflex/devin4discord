@@ -35,8 +35,9 @@ const tasks = new TaskStore(db);
 const guilds = new GuildStore(db);
 const sessions = new SessionStore(db);
 const client = createClient();
+const devin = devinResolver(guilds, secrets, config.devinApiUrl);
 const bridge = new Bridge({
-  devin: devinResolver(guilds, secrets, config.devinApiUrl),
+  devin,
   store: tasks,
   chat: discordChat(client),
   ignorePrefix: IGNORE_PREFIX
@@ -72,7 +73,7 @@ const app = createWebApp({
           : null
       })
   },
-  mcp: createMcpHandler({ publicUrl: config.publicUrl, guilds, tasks, directory, reader: discordReader(client) })
+  mcp: createMcpHandler({ publicUrl: config.publicUrl, guilds, tasks, directory, reader: discordReader(client), devin })
 });
 const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
   console.log(`Setup UI listening on port ${port} (${config.publicUrl}).`);

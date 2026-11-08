@@ -125,6 +125,23 @@ export async function readCapped(response: Response, max: number, name: string):
   return data;
 }
 
+/** The `uuid`/`name` of a Devin attachment URL (`…/attachments/<uuid>/<name>`), or null for any other URL. */
+export function parseAttachmentUrl(raw: string): AgentFile | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  const match = ATTACHMENT_PATH.exec(url.pathname);
+  if (!match) return null;
+  try {
+    return { uuid: match[1], name: decodeURIComponent(match[2]) };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Splits the `ATTACHMENT:{"url": …}` lines Devin appends for attached files out of a
  * message, and drops control-marker lines meant for Devin's webapp. Lines that don't hold
@@ -133,23 +150,15 @@ export async function readCapped(response: Response, max: number, name: string):
 export function parseAgentMessage(message: string): { text: string; files: AgentFile[] } {
   const files: AgentFile[] = [];
   const text = message.replace(ATTACHMENT_LINE, (line, json: string) => {
-    let url: URL;
+    let parsed: { url?: unknown };
     try {
-      const parsed = JSON.parse(json) as { url?: unknown };
-      if (typeof parsed.url !== 'string') return line;
-      url = new URL(parsed.url);
+      parsed = JSON.parse(json) as { url?: unknown };
     } catch {
       return line;
     }
-    const match = ATTACHMENT_PATH.exec(url.pathname);
-    if (!match) return line;
-    let name: string;
-    try {
-      name = decodeURIComponent(match[2]);
-    } catch {
-      return line;
-    }
-    files.push({ uuid: match[1], name });
+    const file = typeof parsed.url === 'string' ? parseAttachmentUrl(parsed.url) : null;
+    if (!file) return line;
+    files.push(file);
     return '';
   });
   return { text: text.replace(CONTROL_LINE, '').replace(/\n{3,}/g, '\n\n').trim(), files };

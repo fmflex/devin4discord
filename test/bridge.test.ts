@@ -5,7 +5,7 @@ import { openDatabase } from '../src/db.ts';
 import type { DevinApi, StartTaskInput, TaskUpdate } from '../src/devin.ts';
 import { TaskStore } from '../src/store.ts';
 
-type Sent = { channelId: string; content: string; ping?: string; buttons?: string[]; files?: string[] };
+type Sent = { channelId: string; content: string; card?: true; ping?: string; buttons?: string[]; files?: string[] };
 
 function setup() {
   const sent: Sent[] = [];
@@ -41,6 +41,16 @@ function setup() {
         content,
         ...(ping ? { ping } : {}),
         ...(buttons ? { buttons: buttons.map((b) => b.customId) } : {}),
+        ...(files ? { files: files.map((f) => `${f.name}:${new TextDecoder().decode(f.data)}`) } : {})
+      });
+    },
+    async sendCard(channelId, { text, pingUserId, files }) {
+      if (deleted.has(channelId)) throw new Error('Unknown Channel');
+      sent.push({
+        channelId,
+        content: text,
+        card: true,
+        ...(pingUserId ? { ping: pingUserId } : {}),
         ...(files ? { files: files.map((f) => `${f.name}:${new TextDecoder().decode(f.data)}`) } : {})
       });
     }
@@ -156,7 +166,7 @@ test('sync relays messages without pings, pings on PRs and waiting, and never re
   );
   await t.bridge.syncAll();
   assert.deepEqual(t.sent, [
-    { channelId: 'thread-1', content: '**Devin:** Which theme?' },
+    { channelId: 'thread-1', content: '**Devin:** Which theme?', card: true },
     { channelId: 'thread-1', content: '<@10> **Pull request:** https://github.com/acme/app/pull/7', ping: '10' },
     { channelId: 'thread-1', content: '<@10> Devin is waiting for a reply: reply in this thread.', ping: '10' }
   ]);
@@ -208,7 +218,7 @@ test('one failing task does not stop the others from syncing', async () => {
   } finally {
     console.error = originalError;
   }
-  assert.deepEqual(t.sent, [{ channelId: 'thread-2', content: '**Devin:** hello' }]);
+  assert.deepEqual(t.sent, [{ channelId: 'thread-2', content: '**Devin:** hello', card: true }]);
 });
 
 test('a task whose thread was deleted stops being polled, even with nothing new to post', async () => {
@@ -364,9 +374,10 @@ test('sync uploads the files Devin attached and links the session for ones it ca
     {
       channelId: 'thread-1',
       content: "**Devin:** Here is the chart.\n\n_Couldn't upload `big.csv`; see https://agent.test/task-1_",
+      card: true,
       files: ['chart.png:bytes of u1']
     },
-    { channelId: 'thread-1', content: '**Devin:**', files: ['only.png:bytes of u2'] }
+    { channelId: 'thread-1', content: '**Devin:**', card: true, files: ['only.png:bytes of u2'] }
   ]);
 });
 
@@ -384,7 +395,7 @@ test('a PR Devin links in its message pings on that message instead of a second 
   );
   await t.bridge.syncAll();
   assert.deepEqual(t.sent, [
-    { channelId: 'thread-1', content: '<@10> **Devin:** Fixed in https://github.com/acme/app/pull/7.', ping: '10' },
+    { channelId: 'thread-1', content: '<@10> **Devin:** Fixed in https://github.com/acme/app/pull/7.', card: true, ping: '10' },
     { channelId: 'thread-1', content: '<@10> **Pull request:** https://github.com/acme/app/pull/8', ping: '10' }
   ]);
   assert.deepEqual(t.store.byThread('thread-1')?.pullRequests, [
@@ -401,5 +412,5 @@ test('a PR Devin links in its message pings on that message instead of a second 
     })
   );
   await t.bridge.syncAll();
-  assert.deepEqual(t.sent, [{ channelId: 'thread-1', content: '**Devin:** Still https://github.com/acme/app/pull/7' }]);
+  assert.deepEqual(t.sent, [{ channelId: 'thread-1', content: '**Devin:** Still https://github.com/acme/app/pull/7', card: true }]);
 });

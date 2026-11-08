@@ -36,13 +36,15 @@ export const DEFAULT_INSTRUCTIONS =
   'Work out what is being asked, fix it and open a pull request. If it is unclear or not actionable, say why and what you need.';
 
 export const RELAY_NOTE =
-  'Your messages are relayed to a Discord thread where the team follows along; their replies in that thread come back to you.';
+  'Your messages are relayed to a Discord thread where the team follows along; their replies in that thread come back to you. ' +
+  'Discord renders Markdown headings, lists, bold, links, code blocks and `-# ` small text, but not tables or HTML, so use lists instead of tables. ' +
+  'Attach charts, screenshots and diagrams as image files: they show inline in the thread.';
 
 export const MCP_TASK_KEY_PREFIX = 'd4dt_';
 
 /** Tells the session its own MCP task key; only this session gets it, so it is what ties MCP calls to this task. */
 export function mcpTaskKeyNote(key: string) {
-  return `Discord MCP task key: ${key}\nPass it as task_key to the devin4discord task-thread tools (read_task_thread, post_to_task_thread, add_reaction). It only works for this task. Keep it secret: never post it in Discord, pull requests, commits or files.`;
+  return `Discord MCP task key: ${key}\nPass it as task_key to the devin4discord task-thread tools (read_task_thread, post_to_task_thread, add_reaction). It only works for this task. post_to_task_thread and post_to_channel can also post images and files: upload them as Devin attachments and pass their URLs in files. Keep it secret: never post it in Discord, pull requests, commits or files.`;
 }
 
 function requester(opener: Person) {

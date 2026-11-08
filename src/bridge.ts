@@ -271,6 +271,12 @@ export class Bridge {
   async syncAll() {
     for (const row of this.store.active()) {
       try {
+        if (!row.guildId || !this.devin(row.guildId)) {
+          // No server or no Devin key: sync can never run, so stop counting it as active.
+          this.store.update(row.taskId, { active: false, stateLabel: 'Devin not set up' });
+          console.log(`Task ${row.taskId} stopped syncing: Devin is not set up in its server.`);
+          continue;
+        }
         if (!(await this.chat.threadExists(row.threadId))) {
           // Its thread was deleted: nowhere to relay to, so stop polling it.
           this.store.update(row.taskId, { active: false, stateLabel: 'thread deleted' });

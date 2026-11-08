@@ -409,7 +409,7 @@ export function permissionsPage(
       <h2>Role permissions</h2>
       <p class="muted">The Administrator row is for members with Discord's Administrator permission. They always keep Change settings, and so does Manage Server. Limits apply to roles that can start tasks; empty means no limit, and a member with several roles (Administrator counts as one) gets the most generous one.</p>
       ${canEdit ? '' : ADMIN_ONLY_NOTE}
-      ${editable(canEdit, html`<div class="scroll"><table class="grid">
+      ${editable(canEdit, html`<div class="scroll"><table class="grid perms">
         <thead><tr><th>Role ${help('roles', html`<p>Roles are read live from Discord. A member gets every permission any of their roles grants.</p><p>For limits, the most generous of their roles that can start tasks applies.</p>`)}</th>${PERMISSIONS.map((p) => html`<th>${PERMISSION_LABELS[p]} ${help(PERMISSION_LABELS[p], PERMISSION_HELP[p])}</th>`)}
           <th>ACU cap / task ${help('the ACU cap', html`<p>The most ACUs (Agent Compute Units, how Devin usage is measured) one task may use. It's sent as the session's <code>max_acu_limit</code>.</p><p>Empty means no cap.</p><p>${doc(DOCS.billing, 'Devin docs: billing and ACUs')} · ${doc(DOCS.createSession, 'create session')}</p>`, true)}</th>
           <th>Tasks / day ${help('tasks per day', html`<p>How many tasks one member may start in any 24 hours.</p><p>Empty means no limit; 0 blocks starting.</p>`, true)}</th>
@@ -513,7 +513,7 @@ export function channelsPage(
       <p class="muted"><strong>Allowed</strong>: where @Devin, the robot reaction, "Send to Devin" and <code>/devin start</code> work. None ticked means every channel.
         <strong>Task channel</strong>: where task threads open; by default the thread opens in the channel the request came from.</p>
       ${channelTools(action, query, shown.length, channels.length)}
-      <table class="grid">
+      <div class="scroll"><table class="grid">
         <thead><tr><th>Channel</th>
           <th>Allowed ${help('allowed channels', html`<p>Where tasks can be started. Threads inside an allowed channel count too.</p><p>With none ticked, every channel the bot can see is allowed.</p>`)}</th>
           <th>Task channel ${help('the task channel', html`<p>Where the task's thread is opened. With "Channel the request came from", the thread opens next to the request (on the message itself for @Devin).</p><p>Pick a channel to keep all task threads in one place.</p>`, true)}</th></tr></thead>
@@ -531,7 +531,7 @@ export function channelsPage(
                 </tr>`
               )}</tbody>`
           )}
-      </table>
+      </table></div>
       ${query && !shown.length ? html`<p class="muted small">No channels match "${query}".</p>` : ''}
       ${anyLocked ? html`<p class="muted small">Channels marked "hidden from you" are ones Discord doesn't let you view, so only Discord Administrators can change them here.</p>` : ''}
       <h3>Mentions and replies</h3>
@@ -584,7 +584,7 @@ export function watchPage(
       <form method="post" action="${action}/channels">
         ${csrfField(session)}
         ${channelTools(action, query, shown.length, channels.length)}
-        ${editable(canEdit, html`${listScope(query, shown)}<table class="grid">
+        ${editable(canEdit, html`${listScope(query, shown)}<div class="scroll"><table class="grid">
           <thead><tr><th>Channel</th>
             <th>Auto-start ${help('auto-start', html`<p>Each new top-level message starts a task, as if it had @mentioned Devin; the task thread opens on the message. In a forum, each new post starts one, with its title and text, and replies in the post go to Devin.</p><p>The author still needs <strong>Start tasks</strong> on the Permissions page, and their role's ACU cap and task limits apply. Messages from anyone else are ignored quietly. To take requests from everyone, give @everyone Start tasks with tight limits.</p><p>Bots, private threads and messages starting with <code>//</code> never start tasks. A watched channel counts as allowed even if it isn't ticked on the Channels tab.</p>`)}</th>
             <th>Anyone ${help('anyone can start', html`<p>Only with Auto-start. Members who don't have <strong>Start tasks</strong> may start tasks here too, within the limits below. Members who have it keep their role's limits.</p><p>Every member who can post here can then spend ACUs, so keep the limits tight.</p>`)}</th>
@@ -601,7 +601,7 @@ export function watchPage(
                   </tr>`
                 )}</tbody>`
             )}
-        </table>
+        </table></div>
         ${query && !shown.length ? html`<p class="muted small">No channels match "${query}".</p>` : ''}
         <h3>Limits for "Anyone" channels</h3>
         <p class="muted small">For members without Start tasks, per member, across every channel ticked under Anyone.</p>
@@ -733,7 +733,7 @@ export function mcpPage(
         ${modeChoice('post_mode', modes.post, 'Post', "Bot's Discord permissions: every channel the bot can post in")}
         <p class="muted small">${help('the channel modes', html`<p><strong>Custom</strong> uses the ticks below (and their fallbacks).</p><p><strong>Bot's Discord permissions</strong> lets Devin read, or post in, every channel and public thread where the bot's role has View Channel and Read Message History (Read) or Send Messages (Post), including channels created later and other tasks' public threads. Private threads stay off-limits.</p><p>Anyone with the token gets that reach, so give the bot's role only the access you want Devin to have.</p>`)} Switching keeps your ticks, so you can switch back.</p>`)}
         ${channelTools(action, query, shown.length, settings.channels.length)}
-        ${editable(canEdit, html`${listScope(query, shown)}<table class="grid">
+        ${editable(canEdit, html`${listScope(query, shown)}<div class="scroll"><table class="grid">
           <thead><tr>
             <th>Channel</th>
             <th>Read ${help('MCP read channels', html`<p>Channels Devin may read through MCP (<code>list_channels</code>, <code>read_channel</code>, <code>get_message</code>), and the public threads inside them. Private threads are never readable. Devin reads its own task thread with <code>read_task_thread</code>, using a key only that task's session gets; it can't open other task threads unless their channel is ticked.</p><p>With none ticked, it follows the Allowed list on the Channels tab. When that's empty too, it can only read channels <strong>@everyone</strong> can see.</p><p>The bot's own Discord permissions come first: where its role can't see the channel (or send messages, for Post), nothing gets through, ticked or not.</p><p>${doc('https://support.discord.com/hc/en-us/articles/206141927-How-is-the-permission-hierarchy-structured', 'Discord permission hierarchy')}</p>`)}</th>
@@ -749,7 +749,7 @@ export function mcpPage(
                   </tr>`
                 )}</tbody>`
             )}
-        </table>
+        </table></div>
         ${query && !shown.length ? html`<p class="muted small">No channels match "${query}".</p>` : ''}
         <p class="muted small">${readSummary}</p>
         <p class="muted small">${postSummary}</p>
@@ -1088,9 +1088,9 @@ code.token{display:inline-block;margin-top:8px;padding:6px 10px;word-break:break
 .warnings{list-style:none;padding:0;margin:12px 0 0;display:flex;flex-direction:column;gap:8px}
 .warnings li{padding:10px 14px;border-radius:8px;border:1px solid}.warnings li.warn{background:rgba(240,178,50,.08);border-color:rgba(240,178,50,.35)}.warnings li.bad{background:rgba(237,66,69,.1);border-color:rgba(237,66,69,.4)}
 .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:10px}
-@media (max-width:860px){.hero{grid-template-columns:1fr;gap:32px;margin-top:8px}.docs{grid-template-columns:1fr}.toc{position:static;flex-flow:row wrap}}
-@media (max-width:600px){main{padding:20px 14px}.top-in{padding:10px 14px;gap:8px}.card{padding:18px}.username,.me .navlink[href="/"],.navlink.navdiscord span{display:none}.user{margin:0 2px;padding-left:8px}.thread{margin-left:16px}.row.between{flex-wrap:wrap}.me{gap:2px}.navlink{padding:6px 8px}.signed-in .brand span{display:none}.servers li{flex-wrap:wrap;gap:10px 14px}.servers .grow{flex-basis:calc(100% - 54px);min-width:0;overflow-wrap:anywhere}.servers li .button{margin-left:auto;padding:8px 14px;font-size:15px}}
-@media (max-width:360px){.signed-in .navdiscord{display:none}}
+@media (max-width:860px){.hero{grid-template-columns:1fr;gap:32px;margin-top:8px}.docs{grid-template-columns:minmax(0,1fr)}.toc{position:static;flex-flow:row wrap}.toc p{flex-basis:100%}}
+@media (max-width:600px){main{padding:20px 14px}.top-in{padding:10px 14px;gap:8px}.card{padding:18px}.username,.me .navlink[href="/"],.navlink.navdiscord span{display:none}.user{margin:0 2px;padding-left:8px}.thread{margin-left:16px}.row.between{flex-wrap:wrap}.me{gap:2px}.navlink{padding:6px 8px}.signed-in .brand span{display:none}.servers li{flex-wrap:wrap;gap:10px 14px}.servers .grow{flex-basis:calc(100% - 54px);min-width:0;overflow-wrap:anywhere}.servers li .button{margin-left:auto;padding:8px 14px;font-size:15px}.tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;border-bottom:0;overflow:visible}.tabs a{display:flex;align-items:center;justify-content:center;text-align:center;white-space:normal;font-size:14px;line-height:1.25;padding:8px 4px;margin:0;border:1px solid var(--line);border-radius:8px}.tabs a.active{border-color:var(--accent);background:rgba(88,101,242,.16)}.grid th,.grid td{padding:8px 6px}.card{position:relative}.help{position:static}.help .tip,.help.end .tip{top:auto;left:12px;right:12px;width:auto;max-width:none;margin-top:6px}.perms th:first-child,.perms td:first-child{position:sticky;left:0;z-index:1;background:var(--card)}.perms th:first-child{z-index:2;background:var(--card-2)}.scroll:has(.perms){margin:0;padding:0}.perms td.role{white-space:normal;min-width:140px;max-width:170px}.perms :is(th,td):first-child .help .tip{left:0;right:auto;width:min(300px,75vw)}.perms :is(th,td):first-child:has(.help[open]){z-index:3}.foot nav{flex-wrap:wrap;gap:8px 16px}.foot nav a{white-space:nowrap}}
+@media (max-width:360px){.navlink.navdiscord{display:none}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
 `;
 

@@ -98,7 +98,7 @@ ${page.meta
   : ''}
 </head>
 <body>
-<header class="top">
+<header class="top${session ? ' signed-in' : ''}">
   <div class="top-in">
   <a class="brand" href="/"><img src="/assets/logo.svg" alt="" width="32" height="32"><span>devin<b>4</b>discord</span></a>
   <nav class="me" aria-label="Account">
@@ -1036,7 +1036,7 @@ button.link{background:none;border:0;color:var(--muted);cursor:pointer;font:inhe
 .servers{list-style:none;padding:0;margin:20px 0 16px;display:flex;flex-direction:column;gap:8px}
 .servers li{display:flex;align-items:center;gap:14px;padding:12px 14px;background:var(--card-2);border:1px solid var(--line);border-radius:10px;transition:border-color .15s}.servers li:hover{border-color:var(--line-2)}
 .icon{width:40px;height:40px;border-radius:50%;flex:none;display:inline-flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#5865f2,#8891ff);color:#fff;font-weight:700;text-transform:uppercase}
-.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;background:rgba(255,255,255,.07);color:var(--muted)}
+.pill{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;background:rgba(255,255,255,.07);color:var(--muted)}
 .pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 .pill.ok{background:rgba(35,165,90,.15);color:#6ddf9a}.pill.warn{background:rgba(240,178,50,.14);color:var(--warn)}
 .guildhead{margin-bottom:8px}.guildhead h1{display:flex;align-items:center;gap:12px;margin:6px 0 16px;font-size:26px}
@@ -1089,7 +1089,8 @@ code.token{display:inline-block;margin-top:8px;padding:6px 10px;word-break:break
 .warnings li{padding:10px 14px;border-radius:8px;border:1px solid}.warnings li.warn{background:rgba(240,178,50,.08);border-color:rgba(240,178,50,.35)}.warnings li.bad{background:rgba(237,66,69,.1);border-color:rgba(237,66,69,.4)}
 .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:10px}
 @media (max-width:860px){.hero{grid-template-columns:1fr;gap:32px;margin-top:8px}.docs{grid-template-columns:1fr}.toc{position:static;flex-flow:row wrap}}
-@media (max-width:600px){main{padding:20px 14px}.top-in{padding:10px 14px}.card{padding:18px}.username,.me .navlink[href="/"],.navlink.navdiscord span{display:none}.user{margin:0 2px;padding-left:8px}.thread{margin-left:16px}.row.between{flex-wrap:wrap}}
+@media (max-width:600px){main{padding:20px 14px}.top-in{padding:10px 14px;gap:8px}.card{padding:18px}.username,.me .navlink[href="/"],.navlink.navdiscord span{display:none}.user{margin:0 2px;padding-left:8px}.thread{margin-left:16px}.row.between{flex-wrap:wrap}.me{gap:2px}.navlink{padding:6px 8px}.signed-in .brand span{display:none}.servers li{flex-wrap:wrap;gap:10px 14px}.servers .grow{flex-basis:calc(100% - 54px);min-width:0;overflow-wrap:anywhere}.servers li .button{margin-left:auto;padding:8px 14px;font-size:15px}}
+@media (max-width:360px){.signed-in .navdiscord{display:none}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
 `;
 

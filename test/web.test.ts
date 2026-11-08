@@ -757,6 +757,33 @@ test('the landing page, docs and images are public', async () => {
   assert.equal((await t.request('/assets/missing.png')).status, 404);
 });
 
+test('public pages are indexable, with canonical URLs, structured data, robots.txt and a sitemap', async () => {
+  const t = setup();
+  const home = await (await t.request('/')).text();
+  assert.match(home, new RegExp(`<link rel="canonical" href="${PUBLIC}/">`));
+  assert.match(home, /<meta name="twitter:card" content="summary">/);
+  assert.doesNotMatch(home, /name="robots"/);
+  const data = [...home.matchAll(/<script type="application\/ld\+json">(.*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
+  assert.deepEqual(data.map((d) => d['@type']), ['WebSite', 'SoftwareApplication']);
+  assert.equal(data[1].url, `${PUBLIC}/`);
+  assert.match(await (await t.request('/docs')).text(), new RegExp(`<link rel="canonical" href="${PUBLIC}/docs">`));
+
+  const robots = await t.request('/robots.txt');
+  assert.equal(robots.status, 200);
+  const rules = await robots.text();
+  assert.match(rules, /^Disallow: \/g\/$/m);
+  assert.match(rules, new RegExp(`^Sitemap: ${PUBLIC}/sitemap.xml$`, 'm'));
+  const sitemap = await t.request('/sitemap.xml');
+  assert.equal(sitemap.status, 200);
+  assert.match(sitemap.headers.get('content-type') ?? '', /application\/xml/);
+  const locs = [...(await sitemap.text()).matchAll(/<loc>(.*?)<\/loc>/g)].map((m) => m[1]);
+  assert.deepEqual(locs, [`${PUBLIC}/`, `${PUBLIC}/docs`]);
+
+  const missing = await (await t.request('/auth/callback')).text();
+  assert.match(missing, /<meta name="robots" content="noindex">/);
+  assert.doesNotMatch(missing, /rel="canonical"/);
+});
+
 test('channel lists filter by name or category and a filtered save only changes the channels shown', async () => {
   const t = setup();
   const { session, csrf } = await signIn(t);

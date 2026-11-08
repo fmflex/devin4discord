@@ -201,10 +201,11 @@ const SECTIONS: Section[] = [
 
 export function docsPage(session: WebSession | null, publicUrl: string) {
   return layout({
-    title: 'Docs',
+    title: 'Docs: set up and use the Devin Discord bot',
     session,
     meta: {
-      description: 'How to set up devin4discord and use Devin from your Discord server.',
+      description:
+        'Set up devin4discord and use Devin, the AI software engineer, from Discord: service user key, permissions, task threads, slash commands, watched channels and the MCP server.',
       url: `${publicUrl}/docs`,
       image: `${publicUrl}/assets/avatar.png`
     },

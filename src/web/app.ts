@@ -61,6 +61,9 @@ const ASSETS: Record<string, Uint8Array<ArrayBuffer>> = Object.fromEntries(
   ])
 );
 
+/** Pages anyone can read, listed in the sitemap. */
+const PUBLIC_PAGES = ['/', '/docs'];
+
 export const SESSION_COOKIE = 'd4d_session';
 export const STATE_COOKIE = 'd4d_oauth_state';
 const SNOWFLAKE = /^\d{15,22}$/;
@@ -265,6 +268,20 @@ export function createWebApp(deps: WebDeps) {
   app.get('/favicon.ico', (c) => c.redirect('/assets/favicon.png', 301));
 
   app.get('/docs', (c) => c.html(docsPage(c.get('session'), deps.publicUrl)));
+
+  app.get('/robots.txt', (c) => {
+    c.header('Cache-Control', 'public, max-age=86400');
+    return c.text(
+      ['User-agent: *', 'Allow: /', 'Disallow: /auth/', 'Disallow: /g/', 'Disallow: /admin', 'Disallow: /mcp', '', `Sitemap: ${deps.publicUrl}/sitemap.xml`, ''].join('\n')
+    );
+  });
+
+  app.get('/sitemap.xml', (c) => {
+    c.header('Content-Type', 'application/xml; charset=utf-8');
+    c.header('Cache-Control', 'public, max-age=86400');
+    const urls = PUBLIC_PAGES.map((path) => `  <url><loc>${deps.publicUrl}${path}</loc></url>`);
+    return c.body(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join('\n')}\n</urlset>\n`);
+  });
 
   app.get('/healthz', (c) => c.text('ok'));
 

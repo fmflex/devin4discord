@@ -19,8 +19,8 @@ export type PageOptions = {
   session?: WebSession | null;
   guild?: { id: string; name: string; tab: GuildTab };
   notice?: { kind: 'ok' | 'error'; text: string } | null;
-  /** Link-preview tags for public pages; `url` is the absolute page URL. */
-  meta?: { description: string; url: string; image: string };
+  /** Search and link-preview tags for public pages; `url` is the absolute, canonical page URL. Pages without it are noindex. */
+  meta?: { description: string; url: string; image: string; structuredData?: object[] };
   /** Show the host admin link in the header (only for users on ADMIN_USER_IDS). */
   admin?: boolean;
   body: Html | Html[];
@@ -65,6 +65,11 @@ function csrfField(session: WebSession) {
   return html`<input type="hidden" name="_csrf" value="${session.csrfToken}">`;
 }
 
+/** JSON for a <script> block; `<` is escaped so no value can close the tag. */
+function jsonLd(data: object) {
+  return raw(JSON.stringify(data).replace(/</g, '\\u003c'));
+}
+
 export function layout(page: PageOptions) {
   const { session, guild } = page;
   const tabs: [GuildTab, string][] = [
@@ -89,13 +94,22 @@ export function layout(page: PageOptions) {
 <meta name="theme-color" content="#5865f2">
 ${page.meta
   ? html`<meta name="description" content="${page.meta.description}">
+<link rel="canonical" href="${page.meta.url}">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="devin4discord">
 <meta property="og:title" content="${page.title}">
 <meta property="og:description" content="${page.meta.description}">
 <meta property="og:url" content="${page.meta.url}">
-<meta property="og:image" content="${page.meta.image}">`
-  : ''}
+<meta property="og:image" content="${page.meta.image}">
+<meta property="og:image:width" content="512">
+<meta property="og:image:height" content="512">
+<meta property="og:image:alt" content="devin4discord logo">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="${page.title}">
+<meta name="twitter:description" content="${page.meta.description}">
+<meta name="twitter:image" content="${page.meta.image}">
+${(page.meta.structuredData ?? []).map((data) => html`<script type="application/ld+json">${jsonLd(data)}</script>`)}`
+  : html`<meta name="robots" content="noindex">`}
 </head>
 <body>
 <header class="top${session ? ' signed-in' : ''}">
@@ -192,17 +206,45 @@ const DEMO = html`<div class="demo" aria-hidden="true">
   </div>
 </div>`;
 
+export const LANDING_TITLE = 'Devin AI bot for Discord: tasks from chat';
+export const LANDING_DESCRIPTION =
+  'Free, open source Discord bot for Devin, the AI software engineer. Mention @Devin on a bug report, follow the work in a thread and get pull requests in Discord.';
+
 export function landingPage(links: { invite: string; publicUrl: string }) {
+  const url = `${links.publicUrl}/`;
+  const image = `${links.publicUrl}/assets/avatar.png`;
   return layout({
-    title: 'Devin, in your Discord server',
+    title: LANDING_TITLE,
     meta: {
-      description: 'Mention @Devin in Discord to hand off a task. Follow the work and reply in a thread.',
-      url: `${links.publicUrl}/`,
-      image: `${links.publicUrl}/assets/avatar.png`
+      description: LANDING_DESCRIPTION,
+      url,
+      image,
+      structuredData: [
+        {
+          '@context': 'https://schema.org',
+          '@type': 'WebSite',
+          name: 'devin4discord',
+          url
+        },
+        {
+          '@context': 'https://schema.org',
+          '@type': 'SoftwareApplication',
+          name: 'devin4discord',
+          description: LANDING_DESCRIPTION,
+          url,
+          image,
+          applicationCategory: 'DeveloperApplication',
+          operatingSystem: 'Discord',
+          isAccessibleForFree: true,
+          license: `${REPO_URL}/blob/main/LICENSE`,
+          offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+          sameAs: [REPO_URL, COMMUNITY_URL]
+        }
+      ]
     },
     body: html`<section class="hero">
       <div class="hero-text">
-        <p class="eyebrow">Free and open source</p>
+        <p class="eyebrow">Free and open source Devin bot for Discord</p>
         <h1>Devin, in your <span class="grad">Discord server</span></h1>
         <p class="lead">Mention <strong>@Devin</strong> on a bug report or feature request. Devin picks it up, works in a thread and posts PRs there. Your team follows along and replies right in Discord.</p>
         <div class="actions">

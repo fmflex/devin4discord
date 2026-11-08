@@ -6,7 +6,7 @@ import { randomToken, safeEqual, type Secrets } from '../crypto.ts';
 import { DEVIN_USER_ID, verifyDevinCredentials, verifyDevinOrgUser } from '../devin.ts';
 import type { AdminStats } from '../admin.ts';
 import { verifyGithubToken } from '../github.ts';
-import { MAX_BODY_BYTES as MAX_MCP_BODY_BYTES, newMcpToken } from '../mcp.ts';
+import { MAX_BODY_BYTES as MAX_MCP_BODY_BYTES, MCP_TOOL_GROUPS, newMcpToken, type McpToolGroup } from '../mcp.ts';
 import type { Directory } from '../directory.ts';
 import { DEFAULT_CONTEXT_MESSAGES, MAX_CONTEXT_MESSAGES, type Actor, type GuildStore, type McpMode } from '../guilds.ts';
 import {
@@ -848,7 +848,8 @@ export function createWebApp(deps: WebDeps) {
       read: deps.guilds.mcpReadChannels(guildId),
       post: deps.guilds.mcpPostChannels(guildId),
       allowed: deps.guilds.allowedChannels(guildId),
-      modes: deps.guilds.mcpModes(guildId)
+      modes: deps.guilds.mcpModes(guildId),
+      disabled: deps.guilds.mcpDisabledGroups(guildId)
     };
   }
 
@@ -916,6 +917,17 @@ export function createWebApp(deps: WebDeps) {
       `read: ${modes.read === 'bot' ? BOT_SCOPE : readable.map(label).join(', ') || 'Channels tab'}; post: ${modes.post === 'bot' ? BOT_SCOPE : postable.map(label).join(', ') || 'none'}`
     );
     return c.redirect(savedRedirect(`/g/${guild.id}/mcp`, form));
+  });
+
+  app.post('/g/:guildId/mcp/tools', adminOnly, async (c) => {
+    const { guild, actor } = ctx(c);
+    const form = (await c.req.parseBody({ all: true })) as Form;
+    const on = new Set(fields(form, 'group'));
+    const disabled = MCP_TOOL_GROUPS.filter((group) => !on.has(group.id)).map((group) => group.id);
+    deps.guilds.setMcpDisabledGroups(guild.id, disabled);
+    const labels = (ids: McpToolGroup[]) => MCP_TOOL_GROUPS.filter((group) => ids.includes(group.id)).map((group) => group.label);
+    deps.guilds.audit(guild.id, actor, 'mcp.tools', disabled.length ? `off: ${labels(disabled).join(', ')}` : 'all tools on');
+    return c.redirect(`/g/${guild.id}/mcp?saved=1`);
   });
 
   app.post('/g/:guildId/mcp/remove', adminOnly, (c) => {

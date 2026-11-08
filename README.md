@@ -6,6 +6,22 @@ Hand Discord messages to Devin and follow the work in a Discord thread. One host
 
 **[Add it to your server at devin4discord.com](https://devin4discord.com)** · [Docs](https://devin4discord.com/docs) · [Discord community](https://discord.gg/Hvys84HkCd)
 
+## Features
+
+- **Start from any message:** `@Devin`, a 🤖 reaction, **Apps → Send to Devin** or `/devin start`.
+- **One thread per task:** Devin's replies show as cards with images inline, plus PR links and pings.
+- **Reply in the thread:** your messages and screenshots go straight to Devin.
+- **Stop, sleep, merge and review** from Discord, with buttons and `/devin` commands.
+- **Run tasks as yourself** with `/devin link`.
+- **Watched channels:** auto-start tasks, or send every message to a Devin Automation.
+- **Roles and limits:** who can start, reply, stop, merge or configure, plus ACU and task caps.
+- **MCP server:** Devin reads and posts in Discord itself, with images, buttons, reactions, threads and polls.
+- **Your org, your key:** each server connects its own Devin organization. Everything is audited.
+
+Contents: [Using it](#using-it) · [Who can do what](#who-can-do-what) · [Watched channels](#watched-channels) · [Devin MCP server](#devin-mcp-server) · [Hosting it](#hosting-it) · [Development](#development) · [Devin API calls](#devin-api-calls)
+
+## Using it
+
 - **Start a task** in one of four ways:
   - Mention the bot: `@Devin fix the login page`. The thread opens on that message.
   - React to a message with 🤖.
@@ -73,17 +89,35 @@ Each server can give Devin an MCP server, so that during a task Devin can read a
    - Authentication: **Auth Header**, key `Authorization`, value `Bearer <token>`
 3. Click **Test tools**.
 
-| Tool | Does |
-| --- | --- |
-| `read_task_thread` | Read the task's thread (needs the task key from the session's prompt) |
-| `post_to_task_thread` | Post in it, pinging nobody, optionally with images or files (`files`: Devin attachment URLs). Not allowed once the task is stopped |
-| `post_to_channel` | Post in a channel the server allows Devin to post in, or in a thread under it; in a forum, start a post (title and tags) or reply in one; takes `files` too; nobody is pinged |
-| `add_reaction` | React to a message in it |
-| `list_channels` | List the channels it may read and post in |
-| `read_channel` | Read a channel ticked under Read or one of its threads; for a forum, list its posts |
-| `get_message` | Read one message, e.g. from a link |
+The tools come in groups. **What Devin can do** on the MCP page switches any group but reading off (all on by default); switched-off tools disappear from Devin's tool list and are refused if called. Only Discord Administrators can change it, and it's audited.
 
-The token decides which server a call is for. The MCP page picks separate Read and Post channel lists. Read defaults to the Channels tab's Allowed list (only channels `@everyone` can see when that's empty too); private threads are never readable or postable, and other tasks' threads only when their channel is on the read list. Post defaults to none. Read and Post can each be switched from **Custom** to **Bot's Discord permissions**, which allows every channel and public thread the bot's role can read (View Channel + Read Message History) or post in (Send Messages), including channels created later; only Discord Administrators can switch it, and it's audited. Each task started while the server has a token gets its own MCP task key in its prompt (only a hash is stored); the task-thread tools (`read_task_thread`, `post_to_task_thread`, `add_reaction`) take that key, so a session can only reach its own thread. `/devin list` only shows task threads the member can see in Discord. Everything read is returned inside an UNTRUSTED block, the same as mention context. The post tools' `files` only take Devin attachment URLs (`…/attachments/<id>/<name>`, up to 10, 10 MB each); the bot downloads them with the server's own Devin key and ignores the URL's host, so they can't make it fetch anything else. The endpoint speaks Streamable HTTP with JSON responses (`POST` only; `GET` returns 405). It rejects requests whose `Origin` isn't `PUBLIC_URL`.
+| Group | Tools | Does |
+| --- | --- | --- |
+| Read Discord (always on) | `read_task_thread`, `list_channels`, `read_channel`, `get_message` | Read the task's thread, list the channels it may use, read an allowed channel or one of its threads (for a forum, list its posts), read one message. Card text, embeds, replies, reactions and poll votes are included |
+| Post messages | `post_to_task_thread`, `post_to_channel` | Post in the task's thread or an allowed channel; in a forum, start a post (title and tags) or reply in one. Optional `files` (images and files), `buttons` (clickable link buttons) and `reply_to` |
+| Edit and delete its own posts | `edit_message`, `delete_message` | Change or remove a message the bot posted. Cards can't be edited, and messages that start a thread stay |
+| Reactions | `add_reaction`, `remove_reaction` | Add or remove the bot's own reaction |
+| Threads and pins | `start_thread`, `pin_message` | Open a public thread in an allowed text channel (on a message or on its own); pin or unpin in the task's thread |
+| Polls | `create_poll` | Post a Discord poll (2–10 answers, 1 hour to 32 days) |
+| Ping the requester | `ping_requester` on `post_to_task_thread` | Ping the member who started the task |
+
+**Where it can act**
+
+- The token decides which server a call is for. The MCP page has separate **Read** and **Post** channel lists.
+- Read defaults to the Channels tab's Allowed list, or channels `@everyone` can see when that's empty too. Post defaults to none.
+- Read and Post can each switch from **Custom** to **Bot's Discord permissions**: every channel and public thread the bot's role can read (View Channel + Read Message History) or post in (Send Messages), including ones created later. Only Discord Administrators can switch it, and it's audited.
+- Post covers everything that writes: posting, reactions, edits and deletes, threads and polls. With none ticked, Devin can only do these in its own task thread.
+- Private threads are never readable or postable. Other tasks' threads are only readable when their channel is on the Read list, and only their own task can edit, react or post polls in them.
+
+**Task keys and safety**
+
+- Each task started while the server has a token gets its own MCP task key in its prompt (only a hash is stored). `task_key` picks the task's own thread, so a session can only reach its own thread. Stopped tasks can't post, edit or poll.
+- Nothing pings anyone, except `ping_requester` in the task's own thread.
+- `edit_message` and `delete_message` only touch messages the bot posted.
+- `buttons` only take http(s) links (up to 5, labels up to 80 characters).
+- `files` only take Devin attachment URLs (`…/attachments/<id>/<name>`, up to 10, 10 MB each). The bot downloads them with the server's own Devin key and ignores the URL's host, so they can't make it fetch anything else.
+- Everything read is returned inside an UNTRUSTED block, the same as mention context. `/devin list` only shows task threads the member can see in Discord.
+- The endpoint speaks Streamable HTTP with JSON responses (`POST` only; `GET` returns 405) and rejects requests whose `Origin` isn't `PUBLIC_URL`.
 
 `PUBLIC_URL` is the MCP URL too, so on a quick tunnel you have to update it in Devin whenever the tunnel URL changes.
 
@@ -94,7 +128,7 @@ The token decides which server a call is for. The MCP page picks separate Read a
 1. **Discord app.** Create one at https://discord.com/developers/applications. Use a separate app for this bot: on start-up it replaces the app's commands.
    - **Bot:** reset and copy the token. Enable **Message Content Intent**.
    - **OAuth2:** copy the client ID and client secret. Under **Redirects** add `<PUBLIC_URL>/auth/callback`, e.g. `https://devin.example.com/auth/callback`.
-   - **Installation:** set the install link to **None**. Servers add the bot from the setup UI's **Add to Discord** button, which asks for View Channels, Send Messages, Send Messages in Threads, Create Public Threads, Create Private Threads, Read Message History, Add Reactions and Embed Links.
+   - **Installation:** set the install link to **None**. Servers add the bot from the setup UI's **Add to Discord** button, which asks for View Channels, Send Messages, Send Messages in Threads, Create Public Threads, Create Private Threads, Read Message History, Add Reactions, Embed Links, Pin Messages and Create Polls. Servers that added the bot before pins and polls existed can give its role **Pin Messages** and **Create Polls** in Discord, or add it again from the setup UI.
 2. **Configure.** `cp .env.example .env`, then fill in `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `MASTER_KEY` (`openssl rand -base64 48`) and `PUBLIC_URL`. Back up `MASTER_KEY`: without it, saved Devin keys can't be read.
 3. **Run:**
 

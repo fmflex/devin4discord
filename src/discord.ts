@@ -7,6 +7,7 @@ import {
   ChannelFlags,
   ChannelType,
   Client,
+  ComponentType,
   ContainerBuilder,
   ContextMenuCommandBuilder,
   DiscordAPIError,
@@ -17,6 +18,7 @@ import {
   MediaGalleryBuilder,
   MediaGalleryItemBuilder,
   MessageFlags,
+  MessageReferenceType,
   Partials,
   PermissionFlagsBits,
   RESTJSONErrorCodes,
@@ -37,7 +39,7 @@ import {
 } from 'discord.js';
 import { LINK_CHECK_ID, type Bot, type ChannelRef, type MessageOutcome, type Outcome } from './bot.ts';
 import type { ChatButton, ChatPort } from './bridge.ts';
-import type { DiscordReader, ForumPost, ReadMessage } from './mcp.ts';
+import type { DiscordReader, ForumPost, LinkButton, OwnChange, ReadMessage } from './mcp.ts';
 import type { ForwardedMessage, MentionContext } from './format.ts';
 import type { Attachment, DownloadedFile } from './devin.ts';
 import type { ChannelInfo, Directory } from './directory.ts';
@@ -191,6 +193,12 @@ export function cardFiles(files: DownloadedFile[]): DownloadedFile[] {
   });
 }
 
+function linkRow(buttons: LinkButton[]) {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    buttons.map((button) => new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(button.label).setURL(button.url))
+  );
+}
+
 function buttonRow(buttons: ChatButton[]) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     buttons.map((button) =>
@@ -211,7 +219,9 @@ export const BOT_PERMISSIONS =
   PermissionFlagsBits.CreatePrivateThreads |
   PermissionFlagsBits.ReadMessageHistory |
   PermissionFlagsBits.AddReactions |
-  PermissionFlagsBits.EmbedLinks;
+  PermissionFlagsBits.EmbedLinks |
+  PermissionFlagsBits.PinMessages |
+  PermissionFlagsBits.SendPolls;
 
 /** Who may run the commands is decided per server by role settings, so they're visible to everyone. */
 export function commandDefinitions() {
@@ -678,16 +688,55 @@ export function wireDiscord(client: Client, bot: Bot, tasks: TaskStore, watcher?
   }
 }
 
+/** The text inside a message's components: card text and link buttons. Card messages have no plain content. */
+export function componentText(components: readonly { toJSON(): unknown }[]): string[] {
+  const out: string[] = [];
+  const walk = (node: unknown) => {
+    if (!node || typeof node !== 'object') return;
+    const item = node as { type?: number; content?: unknown; label?: unknown; url?: unknown; components?: unknown[]; accessory?: unknown };
+    if (item.type === ComponentType.TextDisplay && typeof item.content === 'string') out.push(item.content);
+    if (item.type === ComponentType.Button && typeof item.url === 'string') out.push(`[${typeof item.label === 'string' ? item.label : 'Link'}](${item.url})`);
+    if (Array.isArray(item.components)) item.components.forEach(walk);
+    walk(item.accessory);
+  };
+  for (const component of components) walk(component.toJSON());
+  return out;
+}
+
+function embedText(embed: Message['embeds'][number]) {
+  const lines = [embed.title, embed.url, embed.description, ...embed.fields.map((field) => `${field.name}: ${field.value}`)].filter(Boolean);
+  return lines.length ? `Embed: ${lines.join('\n')}` : '';
+}
+
 function readMessage(message: Message): ReadMessage {
+  const text = [message.content, ...componentText(message.components), ...message.embeds.map(embedText)].filter(Boolean).join('\n');
+  const reference = message.reference;
+  const reactions = [...message.reactions.cache.values()].map(
+    (reaction) => `${reaction.emoji.id ? `${reaction.emoji.name}:${reaction.emoji.id}` : reaction.emoji.name} ${reaction.count}`
+  );
+  const poll = message.poll;
   return {
     id: message.id,
     authorId: message.author.id,
     authorName: message.member?.displayName ?? message.author.displayName,
     bot: message.author.bot,
-    content: message.content,
+    content: text,
     attachments: [...message.attachments.values()].map((file) => file.url),
     createdAt: message.createdTimestamp,
-    link: message.url
+    link: message.url,
+    ...(reference?.type === MessageReferenceType.Default && reference.messageId && reference.channelId === message.channelId
+      ? { replyTo: reference.messageId }
+      : {}),
+    ...(reactions.length ? { reactions } : {}),
+    ...(poll
+      ? {
+          poll: {
+            question: poll.question.text ?? '',
+            answers: [...poll.answers.values()].map((answer) => ({ text: answer.text ?? '', votes: answer.voteCount })),
+            closed: poll.resultsFinalized || (poll.expiresTimestamp ?? Infinity) <= Date.now()
+          }
+        }
+      : {})
   };
 }
 
@@ -720,6 +769,22 @@ export function discordReader(client: Client): DiscordReader {
     const channel = await guildChannel(channelId);
     if (!channel?.isTextBased()) throw new Error(`Channel ${channelId} has no messages to read.`);
     return channel;
+  }
+  async function fetchOrNull(channel: { messages: { fetch(id: string): Promise<Message> } }, messageId: string) {
+    try {
+      return await channel.messages.fetch(messageId);
+    } catch (error) {
+      if (error instanceof DiscordAPIError && error.code === RESTJSONErrorCodes.UnknownMessage) return null;
+      throw error;
+    }
+  }
+  /** A message the bot posted that doesn't start a thread, or why it can't be changed. */
+  async function ownMessage(channelId: string, messageId: string): Promise<Message | Exclude<OwnChange, 'ok' | 'card'>> {
+    const message = await fetchOrNull(await textChannel(channelId), messageId);
+    if (!message) return 'missing';
+    if (message.author.id !== client.user?.id) return 'not_own';
+    if (message.hasThread || message.id === channelId) return 'thread';
+    return message;
   }
   async function forumChannel(channelId: string) {
     const channel = await guildChannel(channelId);
@@ -766,17 +831,28 @@ export function discordReader(client: Client): DiscordReader {
         throw error;
       }
     },
-    async send(channelId, content, files) {
+    async send(channelId, content, files, options = {}) {
       const channel = await textChannel(channelId);
-      const sent = await channel.send({ content: content || undefined, allowedMentions: { parse: [] }, files: uploads(files) });
+      const sent = await channel.send({
+        content: content || undefined,
+        allowedMentions: { parse: [], repliedUser: false, ...(options.pingUserId ? { users: [options.pingUserId] } : {}) },
+        files: uploads(files),
+        ...(options.buttons?.length ? { components: [linkRow(options.buttons)] } : {}),
+        ...(options.replyTo ? { reply: { messageReference: options.replyTo, failIfNotExists: true } } : {})
+      });
       return sent.id;
     },
-    async startPost(forumId, { title, content, tags, files }) {
+    async startPost(forumId, { title, content, tags, files, buttons }) {
       const forum = await forumChannel(forumId);
       const byName = new Map(forum.availableTags.map((tag) => [tag.name, tag.id]));
       const thread = await forum.threads.create({
         name: title,
-        message: { content: content || undefined, allowedMentions: { parse: [] }, files: uploads(files) },
+        message: {
+          content: content || undefined,
+          allowedMentions: { parse: [] },
+          files: uploads(files),
+          ...(buttons?.length ? { components: [linkRow(buttons)] } : {})
+        },
         appliedTags: tags.flatMap((name) => byName.get(name) ?? [])
       });
       return { threadId: thread.id, messageId: thread.id };
@@ -796,6 +872,55 @@ export function discordReader(client: Client): DiscordReader {
       const channel = await textChannel(channelId);
       const message = await channel.messages.fetch(messageId);
       await message.react(emoji);
+    },
+    async unreact(channelId, messageId, emoji) {
+      const channel = await textChannel(channelId);
+      const message = await channel.messages.fetch(messageId);
+      const reaction = message.reactions.cache.find(
+        (item) => item.emoji.name === emoji || (item.emoji.id !== null && `${item.emoji.name}:${item.emoji.id}` === emoji)
+      );
+      if (reaction) await reaction.users.remove(client.user!.id);
+    },
+    async edit(channelId, messageId, { content, buttons }) {
+      const message = await ownMessage(channelId, messageId);
+      if (typeof message === 'string') return message;
+      if (message.flags.has(MessageFlags.IsComponentsV2)) return 'card';
+      await message.edit({
+        content,
+        allowedMentions: { parse: [] },
+        ...(buttons ? { components: buttons.length ? [linkRow(buttons)] : [] } : {})
+      });
+      return 'ok';
+    },
+    async remove(channelId, messageId) {
+      const message = await ownMessage(channelId, messageId);
+      if (typeof message === 'string') return message;
+      await message.delete();
+      return 'ok';
+    },
+    async startThread(channelId, { name, messageId }) {
+      const channel = await guildChannel(channelId);
+      if (channel?.type !== ChannelType.GuildText) throw new Error(`Channel ${channelId} isn't a text channel.`);
+      if (messageId) {
+        const message = await fetchOrNull(channel, messageId);
+        if (!message) return null;
+        return (await message.startThread({ name })).id;
+      }
+      return (await channel.threads.create({ name, type: ChannelType.PublicThread })).id;
+    },
+    async pin(channelId, messageId, pinned) {
+      const message = await fetchOrNull(await textChannel(channelId), messageId);
+      if (!message) return false;
+      await (pinned ? message.pin() : message.unpin());
+      return true;
+    },
+    async poll(channelId, { question, answers, hours, multiselect }) {
+      const channel = await textChannel(channelId);
+      const sent = await channel.send({
+        poll: { question: { text: question }, answers: answers.map((text) => ({ text })), duration: hours, allowMultiselect: multiselect },
+        allowedMentions: { parse: [] }
+      });
+      return sent.id;
     }
   };
 }

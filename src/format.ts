@@ -44,7 +44,7 @@ export const MCP_TASK_KEY_PREFIX = 'd4dt_';
 
 /** Tells the session its own MCP task key; only this session gets it, so it is what ties MCP calls to this task. */
 export function mcpTaskKeyNote(key: string) {
-  return `Discord MCP task key: ${key}\nPass it as task_key to the devin4discord task-thread tools (read_task_thread, post_to_task_thread, add_reaction). It only works for this task. post_to_task_thread and post_to_channel can also post images and files: upload them as Devin attachments and pass their URLs in files. Keep it secret: never post it in Discord, pull requests, commits or files.`;
+  return `Discord MCP task key: ${key}\nPass it as task_key to the devin4discord task-thread tools (read_task_thread, post_to_task_thread, pin_message, and add_reaction, remove_reaction, edit_message, delete_message and create_poll for your thread). It only works for this task. post_to_task_thread and post_to_channel can also post images and files (upload them as Devin attachments and pass their URLs in files) and clickable link buttons (buttons): links inside images can't be clicked. Set ping_requester on post_to_task_thread only when you need the requester's answer or the work is done. Keep it secret: never post it in Discord, pull requests, commits or files.`;
 }
 
 function requester(opener: Person) {

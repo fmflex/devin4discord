@@ -222,6 +222,9 @@ function botSetup() {
     },
     async send(channelId, content) {
       sent.push({ channelId, content });
+    },
+    async sendCard(channelId, { text }) {
+      sent.push({ channelId, content: text });
     }
   };
   const bridge = new Bridge({

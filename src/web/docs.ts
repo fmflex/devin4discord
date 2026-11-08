@@ -149,12 +149,12 @@ const SECTIONS: Section[] = [
         <thead><tr><th>Tool</th><th>Does</th></tr></thead>
         <tbody>
           <tr><td><code>read_task_thread</code></td><td>Read the task's own thread</td></tr>
-          <tr><td><code>post_to_task_thread</code></td><td>Post in it (not after the task is stopped)</td></tr>
+          <tr><td><code>post_to_task_thread</code></td><td>Post in it, with images or files if wanted (not after the task is stopped)</td></tr>
           <tr><td><code>add_reaction</code></td><td>React to a message in it</td></tr>
           <tr><td><code>list_channels</code></td><td>List the channels it may read and post in</td></tr>
           <tr><td><code>read_channel</code></td><td>Read a channel allowed under Read, or a public thread in it; for a forum, list its posts</td></tr>
           <tr><td><code>get_message</code></td><td>Read one message, for example from a link</td></tr>
-          <tr><td><code>post_to_channel</code></td><td>Post in a channel allowed under Post; in a forum, start a post (with a title and tags) or reply in one</td></tr>
+          <tr><td><code>post_to_channel</code></td><td>Post in a channel allowed under Post; in a forum, start a post (with a title and tags) or reply in one; images and files too</td></tr>
         </tbody>
       </table>
       <p><strong>What it can reach:</strong> the Read and Post lists on the MCP page. Read follows the Channels page's Allowed list when nothing is ticked (and only channels <code>@everyone</code> can see when that's empty too). Post is off until you tick something. Switch Read or Post to <strong>Bot's Discord permissions</strong> to follow the bot's role instead: every channel and public thread it can read (or post in), including new ones. Private threads are never readable or postable. Posts never ping anyone.</p>

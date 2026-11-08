@@ -14,6 +14,9 @@ import {
   type MentionContext
 } from './format.ts';
 import type { TaskRow, TaskStore } from './store.ts';
+
+/** Components V2 caps a message's text at 4000 characters. */
+export const CARD_TEXT_LIMIT = 4000;
 import { controlId } from './triggers.ts';
 
 export type ChatButton = { customId: string; label: string; style: 'danger' | 'secondary' };
@@ -38,6 +41,8 @@ export interface ChatPort {
     buttons?: ChatButton[],
     files?: DownloadedFile[]
   ): Promise<void>;
+  /** Posts a Devin message as a card: its text, then images in a gallery and other files below. */
+  sendCard(channelId: string, card: { text: string; pingUserId?: string; files?: DownloadedFile[] }): Promise<void>;
 }
 
 export type StartRequest = {
@@ -353,7 +358,16 @@ export class Bridge {
     if (missing.length) {
       lines.push(`_Couldn't upload ${missing.map((name) => `\`${name}\``).join(', ')}; see ${row.url}_`);
     }
-    await this.post(row.threadId, lines.join('\n\n'), pingUserId, undefined, files);
+    const text = lines.join('\n\n');
+    const chunks = chunkMessage(pingUserId ? `<@${pingUserId}> ${text}` : text, CARD_TEXT_LIMIT);
+    for (let index = 0; index < chunks.length; index++) {
+      const last = index === chunks.length - 1;
+      await this.chat.sendCard(row.threadId, {
+        text: chunks[index],
+        ...(index === 0 && pingUserId ? { pingUserId } : {}),
+        ...(last && files.length ? { files } : {})
+      });
+    }
   }
 
   private async post(

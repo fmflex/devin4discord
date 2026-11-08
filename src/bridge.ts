@@ -15,8 +15,6 @@ import {
 } from './format.ts';
 import type { TaskRow, TaskStore } from './store.ts';
 
-/** Components V2 caps a message's text at 4000 characters. */
-export const CARD_TEXT_LIMIT = 4000;
 import { controlId } from './triggers.ts';
 
 export type ChatButton = { customId: string; label: string; style: 'danger' | 'secondary' };
@@ -41,8 +39,6 @@ export interface ChatPort {
     buttons?: ChatButton[],
     files?: DownloadedFile[]
   ): Promise<void>;
-  /** Posts a Devin message as a card: its text, then images in a gallery and other files below. */
-  sendCard(channelId: string, card: { text: string; pingUserId?: string; files?: DownloadedFile[] }): Promise<void>;
 }
 
 export type StartRequest = {
@@ -342,7 +338,7 @@ export class Bridge {
     }
   }
 
-  /** Posts a Devin message with its attached files uploaded to Discord. */
+  /** Posts a Devin message as a plain message from the bot, with its attached files uploaded to Discord. */
   private async relay(devin: DevinApi, row: TaskRow, message: AgentMessage, pingUserId?: string) {
     const files: DownloadedFile[] = [];
     const missing: string[] = [];
@@ -354,20 +350,11 @@ export class Bridge {
         missing.push(file.name);
       }
     }
-    const lines = [message.text ? `**Devin:** ${message.text}` : '**Devin:**'];
+    const lines = message.text ? [message.text] : [];
     if (missing.length) {
       lines.push(`_Couldn't upload ${missing.map((name) => `\`${name}\``).join(', ')}; see ${row.url}_`);
     }
-    const text = lines.join('\n\n');
-    const chunks = chunkMessage(pingUserId ? `<@${pingUserId}> ${text}` : text, CARD_TEXT_LIMIT);
-    for (let index = 0; index < chunks.length; index++) {
-      const last = index === chunks.length - 1;
-      await this.chat.sendCard(row.threadId, {
-        text: chunks[index],
-        ...(index === 0 && pingUserId ? { pingUserId } : {}),
-        ...(last && files.length ? { files } : {})
-      });
-    }
+    await this.post(row.threadId, lines.join('\n\n'), pingUserId, undefined, files);
   }
 
   private async post(
@@ -378,6 +365,7 @@ export class Bridge {
     files?: DownloadedFile[]
   ) {
     const chunks = chunkMessage(pingUserId ? `<@${pingUserId}> ${content}` : content);
+    if (!chunks.length) chunks.push('');
     for (let index = 0; index < chunks.length; index++) {
       const last = index === chunks.length - 1;
       await this.chat.send(

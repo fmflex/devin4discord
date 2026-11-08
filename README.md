@@ -9,7 +9,7 @@ Hand Discord messages to Devin and follow the work in a Discord thread. One host
 ## Features
 
 - **Start from any message:** `@Devin`, a 🤖 reaction, **Apps → Send to Devin** or `/devin start`.
-- **One thread per task:** Devin's replies show as cards with images inline, plus PR links and pings.
+- **One thread per task:** Devin replies like any member, with images inline, plus PR links and pings.
 - **Reply in the thread:** your messages and screenshots go straight to Devin.
 - **Stop, sleep, merge and review** from Discord, with buttons and `/devin` commands.
 - **Run tasks as yourself** with `/devin link`.
@@ -29,7 +29,7 @@ Contents: [Using it](#using-it) · [Who can do what](#who-can-do-what) · [Watch
   - Run `/devin start task:<…>`.
 
   Devin gets the message text, its images and files, a link back to it and who asked. With a mention, Devin also gets the message being replied to (if any) and the last 10 messages in the channel (set per server on the **Channels** page). That context is marked UNTRUSTED in the prompt: Devin uses it as background and is told never to follow instructions in it. Only the requester's own message counts as instructions. Role mentions and `@everyone` don't trigger the bot.
-- **Follow along:** the bot opens a thread per task and posts Devin's messages, PR links and status changes there. Devin's messages are posted as cards (Discord Components V2): the text, then images and videos in a gallery and other files below. Files Devin attaches to a message (charts, screenshots, reports) are uploaded to Discord with it; one over 10 MB or one the key can't download is named with a link to the session instead. The member who started the task is added to the thread and pinged on new PRs and when Devin needs a reply. When Devin's own message links a new PR, the ping goes on that message and the bot doesn't post the link again.
+- **Follow along:** the bot opens a thread per task and posts Devin's messages, PR links and status changes there. Devin's messages are posted as plain messages from the bot, so it reads like any member talking. Files Devin attaches to a message (charts, screenshots, reports) are uploaded to Discord with it; one over 10 MB or one the key can't download is named with a link to the session instead. The member who started the task is added to the thread and pinged on new PRs and when Devin needs a reply. When Devin's own message links a new PR, the ping goes on that message and the bot doesn't post the link again.
 - **Give feedback:** type in the thread, images included. Messages from members allowed to reply are forwarded to Devin (marked 📨). Messages that start with `//` are not forwarded. Mentioning the bot in a task thread is a reply, not a new task. For busy threads, turn on **Only forward messages that @mention Devin** on the **Channels** page.
 - **Stop or sleep:** `@Devin stop` / `@Devin sleep` in the thread, the **Stop** / **Sleep** buttons on the bot's first message in the thread, or `/devin stop` / `/devin sleep`. Stop ends the Devin session for good and the thread stops syncing. Sleep pauses it; the next forwarded reply wakes Devin. The bot posts who did it in the thread and writes it to the audit log. Members who aren't allowed get a private "you can't do that".
 - **Overview:** `/devin status` inside a thread, `/devin list` anywhere (only tasks in threads you can see).
@@ -95,7 +95,7 @@ The tools come in groups. **What Devin can do** on the MCP page switches any gro
 | --- | --- | --- |
 | Read Discord (always on) | `read_task_thread`, `list_channels`, `read_channel`, `get_message` | Read the task's thread, list the channels it may use, read an allowed channel or one of its threads (for a forum, list its posts), read one message. Card text, embeds, replies, reactions and poll votes are included |
 | Post messages | `post_to_task_thread`, `post_to_channel` | Post in the task's thread or an allowed channel; in a forum, start a post (title and tags) or reply in one. Optional `files` (images and files), `buttons` (clickable link buttons) and `reply_to` |
-| Edit and delete its own posts | `edit_message`, `delete_message` | Change or remove a message the bot posted. Cards can't be edited, and messages that start a thread stay |
+| Edit and delete its own posts | `edit_message`, `delete_message` | Change or remove a message the bot posted, including Devin's own replies. Messages that start a thread stay |
 | Reactions | `add_reaction`, `remove_reaction` | Add or remove the bot's own reaction |
 | Threads and pins | `start_thread`, `pin_message` | Open a public thread in an allowed text channel (on a message or on its own); pin or unpin in the task's thread |
 | Polls | `create_poll` | Post a Discord poll (2–10 answers, 1 hour to 32 days) |

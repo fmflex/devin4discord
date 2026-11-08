@@ -359,7 +359,9 @@ test('MCP read and post channels are configured together with admin opt-in', asy
     { id: '400000000000000004', name: 'dev-help', kind: 'text', category: 'Development', position: 2, bot: { read: true, post: false } }
   ];
   const page = await (await t.request(`/g/${G}/mcp`, { headers: { cookie: session } })).text();
-  assert.match(page, /<h3>Channels<\/h3>/);
+  assert.match(page, /<h2>Channels<\/h2>/);
+  assert.match(page, /<h2>What Devin can do<\/h2>/);
+  assert.match(page, /name="group" value="polls" checked/);
   assert.match(page, /Reading: none ticked, so it follows the Channels tab: #general\./);
   assert.match(page, new RegExp(`action="/g/${G}/mcp/channels"`));
   assert.match(page, /name="read" value="400000000000000001"/);
@@ -408,6 +410,19 @@ test('MCP read and post channels are configured together with admin opt-in', asy
   assert.match(savedPage, /name="post" value="400000000000000001"[^>]*checked/);
   assert.match(savedPage, /name="read_mode" value="custom" checked/);
   assert.match(savedPage, /name="post_mode" value="custom" checked/);
+
+  const tools = await t.request(`/g/${G}/mcp/tools`, {
+    method: 'POST',
+    headers: { cookie: session, origin: PUBLIC, 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams([['_csrf', csrf], ['group', 'post'], ['group', 'reactions'], ['group', 'threads'], ['group', 'nope']])
+  });
+  assert.equal(tools.status, 302);
+  assert.deepEqual(t.guilds.mcpDisabledGroups(G), ['manage', 'polls', 'ping']);
+  assert.equal(t.guilds.auditLog(G)[0].action, 'mcp.tools');
+  assert.equal(t.guilds.auditLog(G)[0].detail, 'off: Edit and delete its own posts, Polls, Ping the requester');
+  const toolsPage = await (await t.request(`/g/${G}/mcp`, { headers: { cookie: session } })).text();
+  assert.match(toolsPage, /name="group" value="post" checked/);
+  assert.doesNotMatch(toolsPage, /name="group" value="polls" checked/);
 
   const botMode = new URLSearchParams([
     ['_csrf', csrf],
@@ -599,6 +614,8 @@ test('a role-granted settings holder can view but not change permissions, the De
     assert.deepEqual(t.guilds.mcpReadChannels(G), []);
     assert.equal((await post(t, `/g/${G}/mcp/channels`, session, { _csrf: csrf, read_mode: 'bot', post_mode: 'bot' })).status, 403);
     assert.deepEqual(t.guilds.mcpModes(G), { read: 'custom', post: 'custom' });
+    assert.equal((await post(t, `/g/${G}/mcp/tools`, session, { _csrf: csrf })).status, 403);
+    assert.deepEqual(t.guilds.mcpDisabledGroups(G), []);
     assert.equal((await post(t, `/g/${G}/mcp/remove`, session, { _csrf: csrf })).status, 403);
   }
   assert.equal(t.guilds.auditLog(G).length, before);

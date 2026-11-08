@@ -149,15 +149,20 @@ const SECTIONS: Section[] = [
         <thead><tr><th>Tool</th><th>Does</th></tr></thead>
         <tbody>
           <tr><td><code>read_task_thread</code></td><td>Read the task's own thread</td></tr>
-          <tr><td><code>post_to_task_thread</code></td><td>Post in it, with images or files if wanted (not after the task is stopped)</td></tr>
-          <tr><td><code>add_reaction</code></td><td>React to a message in it</td></tr>
+          <tr><td><code>post_to_task_thread</code></td><td>Post in it, with images or files, link buttons or as a reply; can ping whoever started the task (not after the task is stopped)</td></tr>
+          <tr><td><code>add_reaction</code> / <code>remove_reaction</code></td><td>Add or remove its own reaction, in its thread or a channel allowed under Post</td></tr>
+          <tr><td><code>edit_message</code> / <code>delete_message</code></td><td>Change or remove a message the bot posted, in its thread or a channel allowed under Post</td></tr>
+          <tr><td><code>pin_message</code></td><td>Pin or unpin a message in its thread</td></tr>
+          <tr><td><code>start_thread</code></td><td>Open a public thread in a text channel allowed under Post, on a message or on its own</td></tr>
+          <tr><td><code>create_poll</code></td><td>Post a Discord poll in its thread or a channel allowed under Post</td></tr>
           <tr><td><code>list_channels</code></td><td>List the channels it may read and post in</td></tr>
           <tr><td><code>read_channel</code></td><td>Read a channel allowed under Read, or a public thread in it; for a forum, list its posts</td></tr>
           <tr><td><code>get_message</code></td><td>Read one message, for example from a link</td></tr>
-          <tr><td><code>post_to_channel</code></td><td>Post in a channel allowed under Post; in a forum, start a post (with a title and tags) or reply in one; images and files too</td></tr>
+          <tr><td><code>post_to_channel</code></td><td>Post in a channel allowed under Post; in a forum, start a post (with a title and tags) or reply in one; images, files, link buttons and replies too</td></tr>
         </tbody>
       </table>
-      <p><strong>What it can reach:</strong> the Read and Post lists on the MCP page. Read follows the Channels page's Allowed list when nothing is ticked (and only channels <code>@everyone</code> can see when that's empty too). Post is off until you tick something. Switch Read or Post to <strong>Bot's Discord permissions</strong> to follow the bot's role instead: every channel and public thread it can read (or post in), including new ones. Private threads are never readable or postable. Posts never ping anyone.</p>
+      <p><strong>What Devin can do</strong> on the MCP page switches tool groups off: posting, editing and deleting its own posts, reactions, threads and pins, polls, and pinging the requester. Switched-off tools disappear from Devin's tool list. Reading is always on.</p>
+      <p><strong>What it can reach:</strong> the Read and Post lists on the MCP page. Read follows the Channels page's Allowed list when nothing is ticked (and only channels <code>@everyone</code> can see when that's empty too). Post is off until you tick something. Switch Read or Post to <strong>Bot's Discord permissions</strong> to follow the bot's role instead: every channel and public thread it can read (or post in), including new ones. Private threads are never readable or postable. Other tasks' threads can't be edited, reacted to or polled in. Posts never ping anyone, except <code>ping_requester</code> in the task's own thread.</p>
       <p><strong>Task threads</strong> need more than the token: each task started while a token exists gets its own task key in its prompt, so a Devin session can only work in its own thread.</p>
       <p>Anyone with the token can read and post where it's allowed. Keep it in Devin only, and generate a new one if it leaks.</p>
       <p>${doc(DOCS.mcp, 'Devin docs: MCP servers')}</p>`

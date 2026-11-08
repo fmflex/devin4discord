@@ -3,6 +3,7 @@ import { html, raw } from 'hono/html';
 import type { ChannelInfo, RoleInfo } from '../directory.ts';
 import { DEFAULT_INSTRUCTIONS } from '../format.ts';
 import { MAX_CONTEXT_MESSAGES, type AuditEntry, type McpModes, type WatchChannel } from '../guilds.ts';
+import { MCP_READ_TOOLS, MCP_TOOL_GROUPS, type McpToolGroup } from '../mcp.ts';
 import { RETENTION_DAYS } from '../retention.ts';
 import type { AdminStats } from '../admin.ts';
 
@@ -157,7 +158,11 @@ const ICONS = {
   reply: '<polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>',
   shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>',
   key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14.5 8.5l2 2"/>',
-  plug: '<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/>'
+  plug: '<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  merge: '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'
 } as const;
 
 const DISCORD_LOGO = raw('<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M20.317 4.37a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.74 19.74 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.1 13.1 0 0 1-1.872-.892.077.077 0 0 1-.008-.128c.126-.094.252-.192.372-.291a.074.074 0 0 1 .078-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.099.246.198.373.292a.077.077 0 0 1-.006.127 12.3 12.3 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.84 19.84 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.182 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>');
@@ -168,11 +173,14 @@ function icon(name: keyof typeof ICONS) {
 
 const FEATURES: [keyof typeof ICONS, string, Html][] = [
   ['at', 'Start from any message', html`Mention <strong>@Devin</strong>, react with 🤖, right-click a message → <strong>Apps → Send to Devin</strong>, or run <code>/devin start</code>. Devin gets the message, its images and files, and a link back to it.`],
-  ['thread', 'One thread per task', html`Devin's updates, PR links and status changes land in a thread. Whoever asked gets pinged when a PR opens or Devin needs an answer.`],
-  ['reply', 'Reply like you normally would', html`Type in the thread and Devin gets it, screenshots included. Start a message with <code>//</code> to keep it between humans.`],
+  ['thread', 'One thread per task', html`Devin's updates, PR links and status changes land in a thread, and whoever asked gets pinged when it matters. Reply there like you normally would, screenshots included.`],
+  ['image', 'Rich replies', html`Devin's messages show as cards, with charts, screenshots and diagrams inline instead of links.`],
+  ['eye', 'Watched channels', html`Start a task on every new message or forum post in a channel, open it to everyone, or send each message to a Devin Automation.`],
+  ['merge', 'Merge and review from Discord', html`<code>/devin merge</code> merges the task's PR once its checks pass. <code>/devin review</code> starts a Devin Review.`],
+  ['user', 'Run tasks as yourself', html`<code>/devin link</code> connects your own Devin account, so your tasks and replies are created as you.`],
   ['shield', 'Roles decide who can do what', html`Pick which roles can start tasks, reply, stop tasks or change settings. Cap ACUs per task, tasks per day and tasks running at once.`],
   ['key', 'Your Devin org, your key', html`Each server connects its own Devin organization with a service user key. The key is stored encrypted and never shown again. Usage goes to your org.`],
-  ['plug', 'Devin can use Discord too', html`Turn on the MCP server and Devin can read its thread, check channels you allow and post updates while it works.`]
+  ['plug', 'Devin can use Discord too', html`With the MCP server, Devin reads and posts in channels you allow, with images and link buttons, and can react, edit its posts, start threads and run polls. You pick what it may do.`]
 ];
 
 const SETUP_STEPS: [string, Html][] = [
@@ -685,21 +693,12 @@ export function watchPage(
   });
 }
 
-const MCP_TOOLS: [string, string][] = [
-  ['read_task_thread', "read the task's thread"],
-  ['post_to_task_thread', 'post in it, without pinging anyone'],
-  ['post_to_channel', 'post in the channels allowed below (in a forum: start a post or reply in one), without pinging anyone'],
-  ['add_reaction', 'react to messages in it'],
-  ['list_channels', 'list the channels it may read and post in'],
-  ['read_channel', 'read a channel allowed under Read (or its threads); for a forum, list its posts'],
-  ['get_message', 'read one message, e.g. from a link']
-];
 
 export function mcpPage(
   session: WebSession,
   guild: { id: string; name: string },
   url: string,
-  settings: { channels: ChannelInfo[]; read: string[]; post: string[]; allowed: string[]; modes: McpModes },
+  settings: { channels: ChannelInfo[]; read: string[]; post: string[]; allowed: string[]; modes: McpModes; disabled: McpToolGroup[] },
   token: { hint: string; createdAt: number } | null,
   newToken: string | null,
   notice: PageOptions['notice'],
@@ -745,7 +744,7 @@ export function mcpPage(
     notice,
     body: html`<section class="card">
       <h2>Devin MCP server</h2>
-      <p class="muted">Lets Devin use Discord during a task: read its task thread, post and react there, and read and post in the channels you pick below. Everything it reads is marked untrusted. It can't reach other servers or channels that aren't allowed.</p>
+      <p class="muted">Lets Devin use Discord during a task: read and post in its task thread, and in the channels you pick below. Everything it reads is marked untrusted. It can't reach other servers or channels that aren't allowed.</p>
       ${newToken
         ? html`<div class="notice ok"><strong>Your new token</strong>. Copy it now; it isn't shown again.<br><code class="token">${newToken}</code></div>`
         : ''}
@@ -756,7 +755,7 @@ export function mcpPage(
       <p class="muted small">${token ? html`Token is <strong>set, ends in …${token.hint}</strong>, created ${created}.` : 'No token yet. Generate one to turn the MCP server on.'}</p>
       ${canEdit ? '' : ADMIN_ONLY_NOTE}
       <form method="post" action="/g/${guild.id}/mcp/token">${csrfField(session)}${editable(canEdit, html`<button class="button">${token ? 'Generate a new token' : 'Generate token'}</button>`)}</form>
-      <h3>Add it to Devin</h3>
+      <details class="setup"${token ? '' : ' open'}><summary>Add it to Devin</summary>
       <ol class="steps">
         <li>In Devin, open <strong>Customize → MCPs</strong>, then <strong>Add MCP → Add custom MCP</strong>. It needs the Manage MCP Servers permission.</li>
         <li>Transport <strong>HTTP</strong>, URL as above.</li>
@@ -764,10 +763,29 @@ export function mcpPage(
         <li>Save, then click <strong>Test tools</strong>.</li>
       </ol>
       <p class="muted small">${doc(DOCS.mcp, 'Devin docs: custom MCP servers')}</p>
-      <h3>Tools</h3>
-      <ul class="steps">${MCP_TOOLS.map(([name, text]) => html`<li><code>${name}</code>: ${text}</li>`)}</ul>
-      <p class="muted small">The task-thread tools take a task key that only that task's Devin session gets in its prompt, so a session can only use its own thread. Tasks started before the token was generated have no key. Stopped tasks can't post.</p>
-      <h3>Channels</h3>
+      </details>
+    </section>
+    <section class="card">
+      <h2>What Devin can do</h2>
+      <p class="muted">Switch off anything you don't want Devin to do. Switched-off tools disappear from Devin's tool list. Where it may do them is set under Channels.</p>
+      <form method="post" action="/g/${guild.id}/mcp/tools">
+        ${csrfField(session)}
+        ${editable(canEdit, html`<div class="toolgroups">
+          <label class="toolgroup"><input type="checkbox" checked disabled aria-label="Read Discord (always on)">
+            <span><span class="tgtitle"><strong>Read Discord</strong><span class="pill">Always on</span></span><span class="muted">Read its task thread, and the channels allowed under Read.</span><span class="toolnames">${MCP_READ_TOOLS.map((name) => html`<code>${name}</code>`)}</span></span></label>
+          ${MCP_TOOL_GROUPS.map(
+            (group) => html`<label class="toolgroup"><input type="checkbox" name="group" value="${group.id}" ${settings.disabled.includes(group.id) ? '' : 'checked'}>
+              <span><span class="tgtitle"><strong>${group.label}</strong></span><span class="muted">${group.text}</span><span class="toolnames">${
+                group.tools.length ? group.tools.map((name) => html`<code>${name}</code>`) : html`<code>ping_requester</code> on <code>post_to_task_thread</code>`
+              }</span></span></label>`
+          )}
+        </div>
+        <button class="button">Save</button>`)}
+      </form>
+      <p class="muted small">Task-thread tools take a task key that only that task's Devin session gets in its prompt, so a session can only use its own thread. Tasks started before the token was generated have no key. Stopped tasks can't post. Edit and delete only work on the bot's own messages.</p>
+    </section>
+    <section class="card">
+      <h2>Channels</h2>
       ${channelSearchForm(action)}
       <form method="post" action="/g/${guild.id}/mcp/channels">
         ${csrfField(session)}
@@ -779,7 +797,7 @@ export function mcpPage(
           <thead><tr>
             <th>Channel</th>
             <th>Read ${help('MCP read channels', html`<p>Channels Devin may read through MCP (<code>list_channels</code>, <code>read_channel</code>, <code>get_message</code>), and the public threads inside them. Private threads are never readable. Devin reads its own task thread with <code>read_task_thread</code>, using a key only that task's session gets; it can't open other task threads unless their channel is ticked.</p><p>With none ticked, it follows the Allowed list on the Channels tab. When that's empty too, it can only read channels <strong>@everyone</strong> can see.</p><p>The bot's own Discord permissions come first: where its role can't see the channel (or send messages, for Post), nothing gets through, ticked or not.</p><p>${doc('https://support.discord.com/hc/en-us/articles/206141927-How-is-the-permission-hierarchy-structured', 'Discord permission hierarchy')}</p>`)}</th>
-            <th>Post ${help('MCP posting channels', html`<p><code>post_to_channel</code> only posts in the ticked channels and threads under them. In a ticked forum it starts new posts and replies in existing ones.</p><p>Nobody is pinged. With none ticked, Devin can only post in its own task threads.</p><p>Anyone with the token can post there, so only tick channels where that's OK.</p><p>The bot's own Discord permissions come first: where its role can't see the channel (or send messages, for Post), nothing gets through, ticked or not.</p><p>${doc('https://support.discord.com/hc/en-us/articles/206141927-How-is-the-permission-hierarchy-structured', 'Discord permission hierarchy')}</p>`, true)}</th>
+            <th>Post ${help('MCP posting channels', html`<p>Where Devin may post (<code>post_to_channel</code>), react, edit or delete its own posts, start threads and post polls: the ticked channels and the threads under them. In a ticked forum it starts new posts and replies in existing ones. Other tasks' threads stay off-limits for anything but posting.</p><p>Nobody is pinged. With none ticked, Devin can only do these in its own task threads.</p><p>Anyone with the token can post there, so only tick channels where that's OK.</p><p>The bot's own Discord permissions come first: where its role can't see the channel (or send messages, for Post), nothing gets through, ticked or not.</p><p>${doc('https://support.discord.com/hc/en-us/articles/206141927-How-is-the-permission-hierarchy-structured', 'Discord permission hierarchy')}</p>`, true)}</th>
           </tr></thead>
             ${[...groups].map(
               ([category, list]) => html`<tbody>${categoryRow(category, 3, ticked(list))}
@@ -1120,6 +1138,13 @@ form:has(.only-ticked:checked) tbody:not(:has(input[name]:checked)){display:none
 .help.end .tip{left:auto;right:-10px}.help .tip p{margin:0 0 8px}.help .tip p:last-child{margin:0}
 .grid td.role{white-space:nowrap;font-weight:600}
 .grid.audit td{vertical-align:top}.grid.audit td.detail{overflow-wrap:anywhere}
+.toolgroups{display:grid;gap:8px;margin:14px 0 16px}
+.toolgroup{display:flex;gap:14px;align-items:flex-start;margin:0;font-weight:400;padding:14px 16px;background:var(--card-2);border:1px solid var(--line);border-radius:10px;cursor:pointer}
+.toolgroup input{margin-top:3px}.toolgroup strong{color:#fff;font-weight:600}
+.toolgroup > span{display:flex;flex-direction:column;gap:4px}.toolgroup .muted{font-size:14px}
+.tgtitle{display:flex;align-items:center;gap:8px}
+.toolnames{display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:var(--muted);font-size:13px}.toolnames code{font-size:12px}
+details.setup{margin-top:18px}details.setup > summary{cursor:pointer;font-weight:700;color:#fff}
 .steps{padding-left:22px;margin:8px 0}.steps li{margin:6px 0}.steps li::marker{color:var(--muted)}
 code.token{display:inline-block;margin-top:8px;padding:6px 10px;word-break:break-all;user-select:all;font-size:14px}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:16px 0}

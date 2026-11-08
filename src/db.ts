@@ -158,7 +158,9 @@ export const MIGRATIONS: string[] = [
      token_hint text not null,
      login text not null,
      updated_at integer not null
-   );`
+   );`,
+  // 11: MCP tool groups a server switched off, comma-separated.
+  `alter table guilds add column mcp_disabled_tools text not null default '';`
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

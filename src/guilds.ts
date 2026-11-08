@@ -1,3 +1,4 @@
+import type { McpToolGroup } from './mcp.ts';
 import type { DatabaseSync } from 'node:sqlite';
 import { PERMISSIONS, type Limits, type Permission, type RoleRule } from './permissions.ts';
 
@@ -361,6 +362,21 @@ export class GuildStore {
         .prepare('update guilds set mcp_read_mode = ?, mcp_post_mode = ?, updated_at = ? where guild_id = ?')
         .run(modes.read, modes.post, Date.now(), guildId);
     });
+  }
+
+  /** MCP tool groups switched off on the MCP page. */
+  mcpDisabledGroups(guildId: string): McpToolGroup[] {
+    const row = this.db.prepare('select mcp_disabled_tools from guilds where guild_id = ?').get(guildId) as
+      | { mcp_disabled_tools: string }
+      | undefined;
+    return (row?.mcp_disabled_tools ?? '').split(',').filter(Boolean) as McpToolGroup[];
+  }
+
+  setMcpDisabledGroups(guildId: string, groups: McpToolGroup[]) {
+    this.ensure(guildId);
+    this.db
+      .prepare('update guilds set mcp_disabled_tools = ?, updated_at = ? where guild_id = ?')
+      .run([...new Set(groups)].join(','), Date.now(), guildId);
   }
 
   setMentionSettings(guildId: string, contextMessages: number, mentionOnlyReplies: boolean) {

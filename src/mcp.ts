@@ -266,7 +266,7 @@ export const TOOLS = [
     name: 'edit_message',
     description:
       'Replace the text of a message the bot posted, in your task thread or a channel you may post in, e.g. to keep one progress message up to date. ' +
-      "Files stay. Pass buttons to replace its link buttons ([] removes them). Your relayed replies are cards and can't be edited; post a new message instead.",
+      "Files stay. Pass buttons to replace its link buttons ([] removes them).",
     inputSchema: {
       type: 'object',
       properties: {
@@ -515,7 +515,7 @@ function ownChange(result: OwnChange, done: string) {
     case 'thread':
       throw new ToolError("That message starts a thread or task, so it can't be changed.");
     case 'card':
-      throw new ToolError("That message is a card (a relayed Devin reply), which can't be edited. Post a new message instead.");
+      throw new ToolError("That message is a card, which can't be edited. Post a new message instead.");
   }
 }
 

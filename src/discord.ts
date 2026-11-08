@@ -8,22 +8,17 @@ import {
   ChannelType,
   Client,
   ComponentType,
-  ContainerBuilder,
   ContextMenuCommandBuilder,
   DiscordAPIError,
   Events,
-  FileBuilder,
   GatewayIntentBits,
   InteractionContextType,
-  MediaGalleryBuilder,
-  MediaGalleryItemBuilder,
   MessageFlags,
   MessageReferenceType,
   Partials,
   PermissionFlagsBits,
   RESTJSONErrorCodes,
   SlashCommandBuilder,
-  TextDisplayBuilder,
   ThreadAutoArchiveDuration,
   type AnyThreadChannel,
   type Attachment as DiscordAttachment,
@@ -53,10 +48,6 @@ export const TRIGGER_EMOJI = '🤖';
 export const IGNORE_PREFIX = '//';
 /** Unprompted DMs (e.g. "not set up yet") go to the same person at most this often per server. */
 const DM_COOLDOWN_MS = 10 * 60 * 1000;
-/** The side bar of Devin's message cards: the setup site's accent. */
-const CARD_ACCENT = 0x8891ff;
-/** Files a media gallery shows inline. */
-const MEDIA_FILE = /\.(png|jpe?g|gif|webp|avif|mp4|webm|mov)$/i;
 
 export function createClient() {
   return new Client({
@@ -142,36 +133,10 @@ export function discordChat(client: Client): ChatPort {
       const channel = await fetchChannel(channelId);
       if (!channel.isSendable()) throw new Error(`Cannot send to channel ${channelId}.`);
       await channel.send({
-        content,
+        content: content || undefined,
         allowedMentions: pingUserId ? { parse: [], users: [pingUserId] } : { parse: [] },
         components: buttons?.length ? [buttonRow(buttons)] : [],
         files: uploads(files)
-      });
-    },
-
-    async sendCard(channelId, { text, pingUserId, files }) {
-      const channel = await fetchChannel(channelId);
-      if (!channel.isSendable()) throw new Error(`Cannot send to channel ${channelId}.`);
-      const named = cardFiles(files ?? []);
-      const container = new ContainerBuilder()
-        .setAccentColor(CARD_ACCENT)
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(text));
-      const media = named.filter((file) => MEDIA_FILE.test(file.name));
-      if (media.length) {
-        container.addMediaGalleryComponents(
-          new MediaGalleryBuilder().addItems(
-            media.map((file) => new MediaGalleryItemBuilder().setURL(`attachment://${file.name}`))
-          )
-        );
-      }
-      for (const file of named.filter((file) => !MEDIA_FILE.test(file.name))) {
-        container.addFileComponents(new FileBuilder().setURL(`attachment://${file.name}`));
-      }
-      await channel.send({
-        flags: MessageFlags.IsComponentsV2,
-        components: [container],
-        allowedMentions: pingUserId ? { parse: [], users: [pingUserId] } : { parse: [] },
-        files: uploads(named)
       });
     }
   };
@@ -179,18 +144,6 @@ export function discordChat(client: Client): ChatPort {
 
 function uploads(files?: DownloadedFile[]) {
   return (files ?? []).map((file) => new AttachmentBuilder(Buffer.from(file.data), { name: file.name }));
-}
-
-/** Card components point at files by `attachment://<name>`, so names are made URL-safe and unique. */
-export function cardFiles(files: DownloadedFile[]): DownloadedFile[] {
-  const taken = new Set<string>();
-  return files.map((file) => {
-    const safe = file.name.replace(/[^\w.-]+/g, '_').replace(/^\.+/, '').slice(-100) || 'file';
-    let name = safe;
-    for (let n = 2; taken.has(name); n++) name = `${n}-${safe}`;
-    taken.add(name);
-    return { name, data: file.data };
-  });
 }
 
 function linkRow(buttons: LinkButton[]) {

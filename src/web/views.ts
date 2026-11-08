@@ -174,7 +174,7 @@ function icon(name: keyof typeof ICONS) {
 const FEATURES: [keyof typeof ICONS, string, Html][] = [
   ['at', 'Start from any message', html`Mention <strong>@Devin</strong>, react with 🤖, right-click a message → <strong>Apps → Send to Devin</strong>, or run <code>/devin start</code>. Devin gets the message, its images and files, and a link back to it.`],
   ['thread', 'One thread per task', html`Devin's updates, PR links and status changes land in a thread, and whoever asked gets pinged when it matters. Reply there like you normally would, screenshots included.`],
-  ['image', 'Rich replies', html`Devin's messages show as cards, with charts, screenshots and diagrams inline instead of links.`],
+  ['image', 'Charts and screenshots inline', html`Devin replies like any member of your server, with the charts, screenshots and diagrams it makes shown right in the thread.`],
   ['eye', 'Watched channels', html`Start a task on every new message or forum post in a channel, open it to everyone, or send each message to a Devin Automation.`],
   ['merge', 'Merge and review from Discord', html`<code>/devin merge</code> merges the task's PR once its checks pass. <code>/devin review</code> starts a Devin Review.`],
   ['user', 'Run tasks as yourself', html`<code>/devin link</code> connects your own Devin account, so your tasks and replies are created as you.`],

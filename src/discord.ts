@@ -731,11 +731,18 @@ export function discordReader(client: Client): DiscordReader {
       throw error;
     }
   }
-  /** A message the bot posted that doesn't start a thread, or why it can't be changed. */
-  async function ownMessage(channelId: string, messageId: string): Promise<Message | Exclude<OwnChange, 'ok' | 'card'>> {
-    const message = await fetchOrNull(await textChannel(channelId), messageId);
+  /**
+   * A message the bot posted that doesn't start a thread, or why it can't be changed.
+   * With `postStarter`, the first message of a forum post counts as changeable.
+   */
+  async function ownMessage(channelId: string, messageId: string, postStarter = false): Promise<Message | Exclude<OwnChange, 'ok' | 'card'>> {
+    const channel = await textChannel(channelId);
+    const message = await fetchOrNull(channel, messageId);
     if (!message) return 'missing';
     if (message.author.id !== client.user?.id) return 'not_own';
+    const forumStarter =
+      message.id === channelId && channel.isThread() && channel.parent?.type === ChannelType.GuildForum;
+    if (postStarter && forumStarter) return message;
     if (message.hasThread || message.id === channelId) return 'thread';
     return message;
   }
@@ -834,8 +841,8 @@ export function discordReader(client: Client): DiscordReader {
       );
       if (reaction) await reaction.users.remove(client.user!.id);
     },
-    async edit(channelId, messageId, { content, buttons }) {
-      const message = await ownMessage(channelId, messageId);
+    async edit(channelId, messageId, { content, buttons, postStarter }) {
+      const message = await ownMessage(channelId, messageId, postStarter);
       if (typeof message === 'string') return message;
       if (message.flags.has(MessageFlags.IsComponentsV2)) return 'card';
       await message.edit({

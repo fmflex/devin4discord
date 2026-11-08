@@ -78,8 +78,8 @@ function setup() {
     },
     react: async (channelId, messageId, emoji) => void reactions.push(`${channelId}/${messageId}/${emoji}`),
     unreact: async (channelId, messageId, emoji) => void reactions.push(`-${channelId}/${messageId}/${emoji}`),
-    edit: async (channelId, messageId, { content, buttons }) => {
-      const result = own(channelId, messageId);
+    edit: async (channelId, messageId, { content, buttons, postStarter }) => {
+      const result = postStarter && messageId === channelId && channelId === FORUM_POST ? 'ok' : own(channelId, messageId);
       if (result === 'ok') changes.push(`edit ${channelId}/${messageId}: ${content}${buttons ? ` [${buttons.map((b) => b.label).join(',')}]` : ''}`);
       return result;
     },
@@ -498,6 +498,13 @@ test('MCP edits, deletes and reacts only where it may post, and only on its own 
   assert.ok(!(await t.tool('remove_reaction', { task_key: KEY, message_id: MSG, emoji: '✅' })).isError);
   assert.deepEqual(t.reactions, [`${GENERAL}/${MSG}/👀`, `-${GENERAL}/${MSG}/👀`, `-${THREAD}/${MSG}/✅`]);
   assert.ok(!(await t.tool('edit_message', { channel_id: GENERAL, message_id: BOT_MSG, content: 'fixed' })).isError);
+
+  // The first message of a forum post can be edited from the channel side, but not deleted, and a task's own starter stays.
+  t.guilds.setMcpChannels(G, [], [GENERAL, FORUM]);
+  assert.ok(!(await t.tool('edit_message', { channel_id: FORUM_POST, message_id: FORUM_POST, content: 'new guide' })).isError);
+  assert.match((await t.tool('delete_message', { channel_id: FORUM_POST, message_id: FORUM_POST })).content[0].text, /starts a thread/);
+  assert.match((await t.tool('edit_message', { task_key: KEY, message_id: THREAD, content: 'x' })).content[0].text, /starts a thread/);
+  assert.equal(t.changes.at(-1), `edit ${FORUM_POST}/${FORUM_POST}: new guide`);
 
   // Another task's thread under an allowed channel is only reachable with that task's key.
   t.tasks.insert({ taskId: 'devin-sub', guildId: G, threadId: SUB_THREAD, sourceMessageId: null, openerId: '2', title: 's', url: 'u', mcpKeyHash: sha256('x') });

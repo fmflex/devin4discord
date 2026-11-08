@@ -244,6 +244,24 @@ test('tasks record their server and fail in a server without Devin', async () =>
   );
 });
 
+test('a task in a server without Devin, or with no server, stops counting as active', async () => {
+  const t = setup();
+  await t.bridge.start({ kind: 'prompt', ...base, channelId: 'chan', task: 'a', attachments: [] });
+  await t.bridge.start({ kind: 'prompt', ...base, channelId: 'chan', task: 'b', attachments: [] });
+  t.store.update('task-1', { guildId: 'g2' });
+  t.store.update('task-2', { guildId: null });
+  const originalLog = console.log;
+  console.log = () => {};
+  try {
+    await t.bridge.syncAll();
+  } finally {
+    console.log = originalLog;
+  }
+  assert.equal(t.store.active().length, 0);
+  assert.equal(t.store.byId('task-1')?.stateLabel, 'Devin not set up');
+  assert.equal(t.store.byId('task-2')?.stateLabel, 'Devin not set up');
+});
+
 const mention = {
   kind: 'mention' as const,
   ...base,

@@ -1,5 +1,5 @@
 import { randomToken, sha256 } from './crypto.ts';
-import type { AgentMessage, Attachment, DevinApi, DownloadedFile, Person } from './devin.ts';
+import { DevinApiError, type AgentMessage, type Attachment, type DevinApi, type DownloadedFile, type Person } from './devin.ts';
 import {
   MCP_TASK_KEY_PREFIX,
   chunkMessage,
@@ -16,6 +16,13 @@ import {
 import type { TaskRow, TaskStore } from './store.ts';
 
 import { controlId } from './triggers.ts';
+
+/** Polls in a row a task may hit 429/5xx from Devin before it's logged as an error. */
+const TRANSIENT_FAILURES_BEFORE_ERROR = 3;
+
+function isTransient(error: unknown) {
+  return error instanceof DevinApiError && (error.status === 429 || error.status >= 500);
+}
 
 export type ChatButton = { customId: string; label: string; style: 'danger' | 'secondary' };
 
@@ -90,6 +97,8 @@ export class Bridge {
   private readonly chat: ChatPort;
   private readonly ignorePrefix: string;
   private readonly syncing = new Set<string>();
+  /** Consecutive transient sync failures per task, so a brief Devin API outage isn't logged as an error. */
+  private readonly transientFailures = new Map<string, number>();
 
   constructor(options: {
     devin: DevinResolver;
@@ -285,7 +294,16 @@ export class Bridge {
           continue;
         }
         await this.sync(row);
+        this.transientFailures.delete(row.taskId);
       } catch (error) {
+        if (isTransient(error)) {
+          const failures = (this.transientFailures.get(row.taskId) ?? 0) + 1;
+          this.transientFailures.set(row.taskId, failures);
+          if (failures < TRANSIENT_FAILURES_BEFORE_ERROR) {
+            console.warn(`Syncing task ${row.taskId} failed, retrying next poll:`, error);
+            continue;
+          }
+        }
         console.error(`Syncing task ${row.taskId} failed:`, error);
       }
     }

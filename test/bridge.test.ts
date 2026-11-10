@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Bridge, type ChatPort } from '../src/bridge.ts';
 import { openDatabase } from '../src/db.ts';
-import type { DevinApi, StartTaskInput, TaskUpdate } from '../src/devin.ts';
+import { DevinApiError, type DevinApi, type StartTaskInput, type TaskUpdate } from '../src/devin.ts';
 import { TaskStore } from '../src/store.ts';
 
 type Sent = { channelId: string; content: string; ping?: string; buttons?: string[]; files?: string[] };
@@ -209,6 +209,35 @@ test('one failing task does not stop the others from syncing', async () => {
     console.error = originalError;
   }
   assert.deepEqual(t.sent, [{ channelId: 'thread-2', content: 'hello' }]);
+});
+
+test('brief Devin API outages are retried quietly and only logged as errors when they persist', async () => {
+  const t = setup();
+  await t.bridge.start({ kind: 'prompt', ...base, channelId: 'chan', task: 'a', attachments: [] });
+  const errors: unknown[] = [];
+  const originalError = console.error;
+  const originalWarn = console.warn;
+  console.error = (...args) => errors.push(args);
+  console.warn = () => {};
+  try {
+    t.updates.set('task-1', new DevinApiError('Devin API GET /sessions/task-1 failed with 504', 504));
+    await t.bridge.syncAll();
+    await t.bridge.syncAll();
+    t.updates.set('task-1', update({}));
+    await t.bridge.syncAll();
+    t.updates.set('task-1', new DevinApiError('Devin API GET /sessions/task-1 failed with 504', 504));
+    await t.bridge.syncAll();
+    await t.bridge.syncAll();
+    assert.equal(errors.length, 0);
+    await t.bridge.syncAll();
+    assert.equal(errors.length, 1);
+    t.updates.set('task-1', new DevinApiError('Devin API GET /sessions/task-1 failed with 400', 400));
+    await t.bridge.syncAll();
+    assert.equal(errors.length, 2);
+  } finally {
+    console.error = originalError;
+    console.warn = originalWarn;
+  }
 });
 
 test('a task whose thread was deleted stops being polled, even with nothing new to post', async () => {
